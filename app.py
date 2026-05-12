@@ -49,7 +49,7 @@ def run_cmd(cmd, callback):
     def _run():
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(BASE), timeout=120)
-            callback(r.stdout + r.stderr, r.returncode == 0)
+            callback((r.stdout or "") + (r.stderr or ""), r.returncode == 0)
         except Exception as e:
             callback(str(e), False)
     threading.Thread(target=_run, daemon=True).start()
@@ -545,7 +545,7 @@ class App(ctk.CTk):
                 try:
                     r = subprocess.run(cmd, capture_output=True, text=True,
                                        cwd=str(BASE), timeout=180)
-                    _add(r.stdout + r.stderr)
+                    _add((r.stdout or "") + (r.stderr or ""))
                     if r.returncode != 0:
                         final_ok = False
                         break
