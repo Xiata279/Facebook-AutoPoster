@@ -1,48 +1,47 @@
 @echo off
 chcp 65001 >nul
-title ⚙️ Cài đặt tự động đăng bài - Xiata
+title ⚙️ Cài Task Scheduler - Chạy với quyền Admin
 
-cd /d "%~dp0"
-
-echo.
 echo ╔══════════════════════════════════════════════════╗
-echo ║    ⚙️  CÀI ĐẶT TỰ ĐỘNG ĐĂNG BÀI BÓNG ĐÁ       ║
+echo ║   ⚙️  CÀI ĐẶT LỊCH TỰ ĐỘNG ĐĂNG BÀI (ADMIN)   ║
 echo ╚══════════════════════════════════════════════════╝
 echo.
 
-:: Đường dẫn đầy đủ đến PHP và script
-set PHP_PATH=C:\xampp\php\php.exe
-set SCRIPT_PATH=%~dp0run_football_post.php
-set TASK_NAME=FootballAutoPostXiata
+set PHP=C:\xampp\php\php.exe
+set SCRIPT=C:\Users\Xiata\Desktop\facebook-auto-poster-main\facebook-auto-poster-main\run_football_post.php
+set DIR=C:\Users\Xiata\Desktop\facebook-auto-poster-main\facebook-auto-poster-main
 
-echo [1] Xóa task cũ nếu có...
-schtasks /delete /tn "%TASK_NAME%" /f >nul 2>&1
+:: Xóa task cũ
+schtasks /delete /tn "FootballAutoPostXiata_7h" /f 2>nul
+schtasks /delete /tn "FootballAutoPostXiata_13h" /f 2>nul
+schtasks /delete /tn "FootballAutoPostXiata_20h" /f 2>nul
 
-echo [2] Tạo task mới - đăng bài 3 lần/ngày (7h, 13h, 20h)...
+:: Tạo task 7h sáng
+schtasks /create /tn "FootballAutoPostXiata_7h" ^
+  /tr "\"%PHP%\" \"%SCRIPT%\"" ^
+  /sc DAILY /st 07:00 /rl HIGHEST /f /sd 05/12/2026
+if %errorlevel%==0 (echo ✅ Task 7h đã tạo!) else (echo ❌ Lỗi task 7h)
 
-:: Tạo 3 task riêng biệt cho 3 khung giờ
-schtasks /create /tn "%TASK_NAME%_7h" ^
-    /tr "\"%PHP_PATH%\" \"%SCRIPT_PATH%\"" ^
-    /sc DAILY /st 07:00 ^
-    /rl HIGHEST /f
+:: Tạo task 13h trưa
+schtasks /create /tn "FootballAutoPostXiata_13h" ^
+  /tr "\"%PHP%\" \"%SCRIPT%\"" ^
+  /sc DAILY /st 13:00 /rl HIGHEST /f /sd 05/12/2026
+if %errorlevel%==0 (echo ✅ Task 13h đã tạo!) else (echo ❌ Lỗi task 13h)
 
-schtasks /create /tn "%TASK_NAME%_13h" ^
-    /tr "\"%PHP_PATH%\" \"%SCRIPT_PATH%\"" ^
-    /sc DAILY /st 13:00 ^
-    /rl HIGHEST /f
-
-schtasks /create /tn "%TASK_NAME%_20h" ^
-    /tr "\"%PHP_PATH%\" \"%SCRIPT_PATH%\"" ^
-    /sc DAILY /st 20:00 ^
-    /rl HIGHEST /f
+:: Tạo task 20h tối
+schtasks /create /tn "FootballAutoPostXiata_20h" ^
+  /tr "\"%PHP%\" \"%SCRIPT%\"" ^
+  /sc DAILY /st 20:00 /rl HIGHEST /f /sd 05/12/2026
+if %errorlevel%==0 (echo ✅ Task 20h đã tạo!) else (echo ❌ Lỗi task 20h)
 
 echo.
-echo ✅ Đã cài đặt xong! Lịch đăng bài:
-echo    🕖 07:00 - Buổi sáng
-echo    🕑 13:00 - Buổi trưa
-echo    🕗 20:00 - Buổi tối
+echo ═══════════════════════════════════════
+echo  Kiểm tra lịch đã tạo:
+schtasks /query /tn "FootballAutoPostXiata*" /fo LIST 2>nul
+echo ═══════════════════════════════════════
 echo.
-echo Để xem lịch: schtasks /query /tn "%TASK_NAME%*"
-echo Để xóa lịch: chạy file bo_lich.bat
+echo ✅ Lịch đăng bài tự động: 7h - 13h - 20h mỗi ngày
+echo.
+echo ⚠️  Nhớ điền Facebook credentials vào file .env trước khi lịch chạy!
 echo.
 pause
