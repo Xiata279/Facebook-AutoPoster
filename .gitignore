@@ -5,3 +5,4 @@
 /images/football_news_*
 facebook_poster.log
 .env
+test_*.php
