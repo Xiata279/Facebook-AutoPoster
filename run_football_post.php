@@ -16,22 +16,29 @@
 require_once __DIR__ . '/footballAutoWorkflow.php';
 
 // ═══════════════════════════════════════════════════════
-//  CẤU HÌNH - THAY ĐỔI THÔNG TIN CỦA BẠN TẠI ĐÂY
-// ═══════════════════════════════════════════════════════
+// Đọc cấu hình từ file .env
+$env_file = __DIR__ . '/.env';
+$env = [];
+if (file_exists($env_file)) {
+    $env = parse_ini_file($env_file);
+} else {
+    echo "\u26a0️ Không tìm thấy file .env\n";
+    echo "   Sao chép .env.example thành .env và điền thông tin vào\n\n";
+}
 
 $config = [
     // ─── Facebook Credentials ───
-    'page_id'            => 'THAY_PAGE_ID_CUA_BAN',
-    'page_access_token'  => 'THAY_ACCESS_TOKEN_CUA_BAN',
+    'page_id'            => $env['FB_PAGE_ID'] ?? '',
+    'page_access_token'  => $env['FB_ACCESS_TOKEN'] ?? '',
     'facebook_api_version' => 'v20.0',
 
     // ─── Grok AI (xAI) — AI chính để viết bài ───
-    'grok_api_key'       => 'THAY_GROK_API_KEY_CUA_BAN',  // xai-...
-    'grok_model'         => 'grok-3-mini-fast',            // grok-3 | grok-3-mini | grok-3-mini-fast
+    'grok_api_key'       => $env['GROK_API_KEY'] ?? '',
+    'grok_model'         => $env['GROK_MODEL'] ?? 'grok-3-mini-fast',
 
     // ─── Gemini AI — fallback text + tạo ảnh Imagen ───
-    'gemini_api_key'     => 'THAY_GEMINI_API_KEY_CUA_BAN',
-    'gemini_model'       => 'gemini-2.5-flash-lite',       // model Gemini để tạo text (fallback)
+    'gemini_api_key'     => $env['GEMINI_API_KEY'] ?? '',
+    'gemini_model'       => $env['GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite',
 
     // ─── Cấu hình Thu thập tin ───
     'max_articles'       => 5,
@@ -40,14 +47,14 @@ $config = [
 
     // ─── Cấu hình Bài đăng ───
     'post_style'         => 'tong_hop',
-    'max_posts'          => 3,
-    'generate_image'     => true,
+    'max_posts'          => 1,
+    'generate_image'     => false,
 
     // ─── Thư mục ───
-    'image_folder'       => './images/',
-    'log_file'           => './logs/workflow.log',
-    'cache_dir'          => './cache/',
-    'output_dir'         => './output/',
+    'image_folder'       => __DIR__ . '/images/',
+    'log_file'           => __DIR__ . '/logs/workflow.log',
+    'cache_dir'          => __DIR__ . '/cache/',
+    'output_dir'         => __DIR__ . '/output/',
 ];
 
 // ═══════════════════════════════════════════════════════

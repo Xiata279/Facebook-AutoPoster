@@ -352,7 +352,7 @@ class FacebookAutoPoster {
             $this->log('Đang tạo chú thích bằng Gemini AI');
             
             
-            $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' . $this->gemini_api_key;
+            $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' . $this->gemini_api_key;
             
             $data = [
                 'contents' => [
