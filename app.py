@@ -6,7 +6,7 @@ Chạy: python app.py
 Cài thư viện: pip install customtkinter pillow
 """
 
-import os, sys, json, subprocess, threading, time
+import os, sys, json, subprocess, threading, time, socket
 from pathlib import Path
 from datetime import datetime
 try:
@@ -54,12 +54,40 @@ def run_cmd(cmd, callback):
             callback(str(e), False)
     threading.Thread(target=_run, daemon=True).start()
 
-def check_chrome():
-    import socket
+def find_chrome_path() -> str | None:
+    """Tìm đường dẫn Chrome tự động"""
+    candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+def check_chrome() -> bool:
     try:
         s = socket.create_connection(("127.0.0.1", 9222), timeout=1)
         s.close(); return True
     except: return False
+
+def get_chrome_info() -> dict:
+    """Lấy thông tin Chrome đang chạy qua DevTools API"""
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=2) as r:
+            tabs = json.loads(r.read())
+            fb_tabs = [t for t in tabs if "facebook.com" in t.get("url","")]
+            return {"connected": True, "tabs": len(tabs),
+                    "fb_tabs": len(fb_tabs),
+                    "fb_url": fb_tabs[0].get("url","") if fb_tabs else ""}
+    except:
+        return {"connected": False, "tabs": 0, "fb_tabs": 0, "fb_url": ""}
+
+def check_fb_logged_in(fb_url: str) -> bool:
+    """Kiểm tra URL có phải đã đăng nhập không"""
+    return "facebook.com" in fb_url and "login" not in fb_url
 
 
 # ════════════════════════════════════════════════
@@ -260,15 +288,76 @@ class App(ctk.CTk):
         ctk.CTkLabel(p, text="✨  Tạo & Đăng bài", font=ctk.CTkFont(size=20, weight="bold"),
                      text_color="#e6edf3").pack(anchor="w", padx=20, pady=(20,16))
 
-        # ── Chrome control ──
-        cc = self._card(p, "🌐 Chrome")
-        crow = ctk.CTkFrame(cc, fg_color="transparent")
-        crow.pack(fill="x", padx=16, pady=(0,14))
-        ctk.CTkButton(crow, text="🟢  Mở Chrome & Facebook", width=210, height=36,
-                      font=ctk.CTkFont(size=13), fg_color="#1f6feb", hover_color="#388bfd",
-                      command=self._open_chrome).pack(side="left", padx=(0,10))
-        self.chrome_status_lbl = ctk.CTkLabel(crow, text="", font=ctk.CTkFont(size=12), text_color="#8b949e")
-        self.chrome_status_lbl.pack(side="left")
+        # ── Chrome Wizard ──
+        cc = self._card(p, "🌐 Kết nối Chrome & Facebook")
+
+        # Step indicators
+        steps_frame = ctk.CTkFrame(cc, fg_color="transparent")
+        steps_frame.pack(fill="x", padx=16, pady=(4, 12))
+        steps_frame.columnconfigure((0, 1, 2), weight=1)
+
+        self._step_lbls = {}
+        step_defs = [
+            ("step1", "1", "Mở Chrome"),
+            ("step2", "2", "Đăng nhập FB"),
+            ("step3", "3", "Sẵn sàng đăng"),
+        ]
+        for col, (k, num, label) in enumerate(step_defs):
+            sf2 = ctk.CTkFrame(steps_frame, fg_color="#0d1117", corner_radius=8)
+            sf2.grid(row=0, column=col, padx=4, sticky="ew", pady=4)
+            num_lbl = ctk.CTkLabel(sf2, text=num, width=28, height=28,
+                                   font=ctk.CTkFont(size=13, weight="bold"),
+                                   fg_color="#30363d", corner_radius=14,
+                                   text_color="#8b949e")
+            num_lbl.pack(side="left", padx=(10, 6), pady=10)
+            txt = ctk.CTkLabel(sf2, text=label, font=ctk.CTkFont(size=12),
+                               text_color="#8b949e")
+            txt.pack(side="left", pady=10)
+            self._step_lbls[k] = (num_lbl, txt)
+
+        # Controls row
+        ctrl = ctk.CTkFrame(cc, fg_color="transparent")
+        ctrl.pack(fill="x", padx=16, pady=(0, 6))
+
+        self.btn_open_chrome = ctk.CTkButton(
+            ctrl, text="🟢  Mở Chrome", width=140, height=36,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#1f6feb", hover_color="#388bfd",
+            command=self._open_chrome)
+        self.btn_open_chrome.pack(side="left", padx=(0, 8))
+
+        self.btn_check_fb = ctk.CTkButton(
+            ctrl, text="🔍  Kiểm tra Đăng nhập", width=170, height=36,
+            font=ctk.CTkFont(size=13),
+            fg_color="#21262d", hover_color="#30363d",
+            command=self._check_fb_status)
+        self.btn_check_fb.pack(side="left", padx=(0, 8))
+
+        self.btn_goto_fb = ctk.CTkButton(
+            ctrl, text="📲  Vào Facebook", width=140, height=36,
+            font=ctk.CTkFont(size=13),
+            fg_color="#21262d", hover_color="#30363d",
+            command=self._goto_facebook)
+        self.btn_goto_fb.pack(side="left")
+
+        # Status label
+        self.chrome_status_lbl = ctk.CTkLabel(
+            cc, text="● Nhấn Mở Chrome để bắt đầu",
+            font=ctk.CTkFont(size=12), text_color="#8b949e")
+        self.chrome_status_lbl.pack(anchor="w", padx=16, pady=(0, 4))
+
+        # Pages list
+        self.chrome_pages_lbl = ctk.CTkLabel(
+            cc, text="", font=ctk.CTkFont(size=11), text_color="#8b949e",
+            justify="left")
+        self.chrome_pages_lbl.pack(anchor="w", padx=16, pady=(0, 12))
+
+        # Chrome path info
+        chrome_path = find_chrome_path()
+        path_color = "#3fb950" if chrome_path else "#da3633"
+        path_text = f"📂 Chrome: {chrome_path}" if chrome_path else "❌ Không tìm thấy Chrome! Hãy kiểm tra cài đặt."
+        ctk.CTkLabel(cc, text=path_text, font=ctk.CTkFont(size=10),
+                     text_color=path_color).pack(anchor="w", padx=16, pady=(0, 12))
 
         # ── Workflow ──
         bf = self._card(p, "🎛️ Quy trình")
@@ -314,14 +403,115 @@ class App(ctk.CTk):
         self.post_output.configure(state="disabled")
 
     def _open_chrome(self):
-        """Mở Chrome với remote debugging"""
-        bat = BASE / "mo_chrome.bat"
-        subprocess.Popen(["cmd", "/c", str(bat)], creationflags=subprocess.CREATE_NEW_CONSOLE)
-        self.chrome_status_lbl.configure(text="⏳ Đang mở Chrome...", text_color="#d29922")
-        self.after(4000, lambda: self.chrome_status_lbl.configure(
-            text="✅ Chrome đã mở — hãy đăng nhập Facebook" if check_chrome() else "⚠️ Chưa kết nối được",
-            text_color="#3fb950" if check_chrome() else "#d29922"
-        ))
+        chrome_path = find_chrome_path()
+        if not chrome_path:
+            self.chrome_status_lbl.configure(
+                text="❌ Không tìm thấy Chrome! Kiểm tra cài đặt.",
+                text_color="#da3633")
+            return
+
+        profile_dir = str(BASE / "chrome_profile")
+        self.btn_open_chrome.configure(state="disabled", text="⏳ Đang mở...")
+        self.chrome_status_lbl.configure(text="⏳ Đang khởi động Chrome...", text_color="#d29922")
+        self._set_step(1, "pending")
+
+        def _do_open():
+            subprocess.Popen([
+                chrome_path,
+                "--remote-debugging-port=9222",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run", "--disable-default-apps",
+                "https://www.facebook.com"
+            ])
+            time.sleep(4)
+            ok = check_chrome()
+            def _upd():
+                self.btn_open_chrome.configure(state="normal", text="🟢  Mở Chrome")
+                if ok:
+                    self._set_step(1, "done")
+                    self.chrome_status_lbl.configure(
+                        text="✅ Chrome đã mở — Hãy đăng nhập Facebook rồi nhấn Kiểm tra",
+                        text_color="#3fb950")
+                else:
+                    self._set_step(1, "error")
+                    self.chrome_status_lbl.configure(
+                        text="❌ Chrome mở nhưng chưa kết nối được",
+                        text_color="#da3633")
+            self.after(0, _upd)
+        threading.Thread(target=_do_open, daemon=True).start()
+
+    def _goto_facebook(self):
+        """Dẫn Chrome đang chạy đến facebook.com"""
+        if not check_chrome():
+            self.chrome_status_lbl.configure(
+                text="⚠️ Chrome chưa mở — nhấn Mở Chrome trước", text_color="#d29922")
+            return
+        try:
+            import urllib.request
+            url = "http://127.0.0.1:9222/json/new?https://www.facebook.com"
+            urllib.request.urlopen(url, timeout=2)
+            self.chrome_status_lbl.configure(
+                text="✅ Đã mở tab Facebook trong Chrome", text_color="#3fb950")
+        except:
+            self.chrome_status_lbl.configure(
+                text="⚠️ Không thể mở tab mới", text_color="#d29922")
+
+    def _check_fb_status(self):
+        """Kiểm tra trạng thái đăng nhập Facebook"""
+        self.btn_check_fb.configure(state="disabled", text="⏳ Đang kiểm tra...")
+        def _do():
+            info = get_chrome_info()
+            env  = read_env()
+            pages_raw = env.get("FB_PAGES", "")
+            pages = [p.strip() for p in pages_raw.split(",") if p.strip() and "THAY" not in p]
+
+            def _upd():
+                self.btn_check_fb.configure(state="normal", text="🔍  Kiểm tra Đăng nhập")
+                if not info["connected"]:
+                    self._set_step(1, "error")
+                    self._set_step(2, "pending")
+                    self.chrome_status_lbl.configure(
+                        text="❌ Chrome chưa kết nối — hãy nhấn Mở Chrome",
+                        text_color="#da3633")
+                    return
+
+                self._set_step(1, "done")
+                logged_in = check_fb_logged_in(info["fb_url"])
+
+                if logged_in:
+                    self._set_step(2, "done")
+                    self._set_step(3, "done")
+                    pages_info = "\n".join(f"   • facebook.com/{pg}" for pg in pages) or "   (Chưa có trang nào — vào Cài đặt để thêm)"
+                    self.chrome_status_lbl.configure(
+                        text=f"✅ Đã đăng nhập Facebook! {info['tabs']} tab đang mở.",
+                        text_color="#3fb950")
+                    self.chrome_pages_lbl.configure(
+                        text=f"🎯 Trang sẽ đăng bài:\n{pages_info}",
+                        text_color="#58a6ff")
+                else:
+                    self._set_step(2, "error")
+                    self.chrome_status_lbl.configure(
+                        text="⚠️ Chrome mở nhưng chưa đăng nhập Facebook — nhấn Vào Facebook",
+                        text_color="#d29922")
+                    self.chrome_pages_lbl.configure(text="")
+            self.after(0, _upd)
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _set_step(self, step: int, state: str):
+        """Cập nhật hiển thị step wizard: pending/done/error"""
+        key = f"step{step}"
+        if key not in self._step_lbls: return
+        num_lbl, txt = self._step_lbls[key]
+        colors = {
+            "pending": ("#d29922", "#d29922", "#484f58"),
+            "done":    ("#3fb950", "#ffffff", "#238636"),
+            "error":   ("#da3633", "#ffffff", "#67060c"),
+            "idle":    ("#8b949e", "#8b949e", "#30363d"),
+        }
+        tc, ntc, nbg = colors.get(state, colors["idle"])
+        prefix = {"done": "✓", "error": "✕", "pending": "●"}.get(state, str(step))
+        num_lbl.configure(text=prefix, text_color=ntc, fg_color=nbg)
+        txt.configure(text_color=tc)
 
     def _run_full_workflow(self):
         """Chạy toàn bộ: PHP scrape+AI → Chrome post"""
@@ -609,10 +799,15 @@ class App(ctk.CTk):
         # Cập nhật trạng thái Chrome trên trang Post
         try:
             ok = check_chrome()
-            self.chrome_status_lbl.configure(
-                text="✅ Chrome đã kết nối" if ok else "⚠️ Chrome chưa kết nối — nhấn Mở Chrome",
-                text_color="#3fb950" if ok else "#8b949e"
-            )
+            if ok:
+                self._set_step(1, "done")
+                self.chrome_status_lbl.configure(
+                    text="✅ Chrome đã kết nối — nhấn Kiểm tra Đăng nhập",
+                    text_color="#3fb950")
+            else:
+                self.chrome_status_lbl.configure(
+                    text="⚠️ Chrome chưa kết nối — nhấn Mở Chrome",
+                    text_color="#8b949e")
         except: pass
         self.after(10000, self._refresh_loop)
 
