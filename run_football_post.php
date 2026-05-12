@@ -21,22 +21,27 @@ require_once __DIR__ . '/footballAutoWorkflow.php';
 
 $config = [
     // ─── Facebook Credentials ───
-    'page_id'            => 'THAY_PAGE_ID_CUA_BAN',          // ID trang Facebook
-    'page_access_token'  => 'THAY_ACCESS_TOKEN_CUA_BAN',     // Access Token trang
+    'page_id'            => 'THAY_PAGE_ID_CUA_BAN',
+    'page_access_token'  => 'THAY_ACCESS_TOKEN_CUA_BAN',
     'facebook_api_version' => 'v20.0',
 
-    // ─── Gemini AI API Key ───
-    'gemini_api_key'     => 'THAY_GEMINI_API_KEY_CUA_BAN',   // Khóa API Gemini
+    // ─── Grok AI (xAI) — AI chính để viết bài ───
+    'grok_api_key'       => 'THAY_GROK_API_KEY_CUA_BAN',  // xai-...
+    'grok_model'         => 'grok-3-mini-fast',            // grok-3 | grok-3-mini | grok-3-mini-fast
+
+    // ─── Gemini AI — fallback text + tạo ảnh Imagen ───
+    'gemini_api_key'     => 'THAY_GEMINI_API_KEY_CUA_BAN',
+    'gemini_model'       => 'gemini-2.5-flash-lite',       // model Gemini để tạo text (fallback)
 
     // ─── Cấu hình Thu thập tin ───
-    'max_articles'       => 5,        // Số bài tối đa mỗi nguồn tin
-    'date_filter'        => 'both',   // 'today' = hôm nay, 'yesterday' = hôm qua, 'both' = cả hai
-    'fetch_full_content' => false,    // true = lấy nội dung đầy đủ (chậm hơn), false = chỉ lấy tiêu đề + mô tả
+    'max_articles'       => 5,
+    'date_filter'        => 'both',
+    'fetch_full_content' => false,
 
     // ─── Cấu hình Bài đăng ───
-    'post_style'         => 'tong_hop', // 'tong_hop' = gộp nhiều tin thành 1 bài, 'don_le' = mỗi tin 1 bài
-    'max_posts'          => 3,          // Số bài đăng tối đa (cho chế độ 'don_le')
-    'generate_image'     => true,       // true = tạo ảnh AI minh họa, false = chỉ đăng text
+    'post_style'         => 'tong_hop',
+    'max_posts'          => 3,
+    'generate_image'     => true,
 
     // ─── Thư mục ───
     'image_folder'       => './images/',
@@ -90,7 +95,9 @@ switch ($mode) {
 
         $preview = $workflow->previewPost();
 
-        echo "📰 Số tin đã thu thập: {$preview['articles_count']}\n\n";
+        echo "📰 Số tin đã thu thập: {$preview['articles_count']}\n";
+        echo "Trạng thái: {$preview['status']}\n";
+        echo "AI dùng: " . strtoupper($preview['ai_provider'] ?? '?') . "\n\n";
         echo "═══ BÀI ĐĂNG FACEBOOK ═══\n\n";
         echo $preview['post_content'];
         echo "\n\n═══════════════════════════\n";

@@ -5,13 +5,16 @@
  * 
  * Quy trình tự động hoàn chỉnh:
  * 1. Thu thập tin tức bóng đá từ các nguồn Việt Nam
- * 2. Tóm tắt nội dung bằng Gemini AI
+ * 2. Tóm tắt nội dung bằng Grok AI (xAI) hoặc Gemini AI
  * 3. Tạo bài đăng Facebook hấp dẫn với câu hỏi tương tác
- * 4. Tạo ảnh minh họa bằng Imagen AI
+ * 4. Tạo ảnh minh họa bằng Imagen AI (Gemini)
  * 5. Đăng lên Fanpage Facebook
  * 
+ * AI Text  : Grok (xai-...) → fallback Gemini nếu lỗi
+ * AI Image : Gemini Imagen
+ * 
  * @author Xiata
- * @version 1.0.0
+ * @version 1.1.0
  */
 
 require_once __DIR__ . '/footballNewsScraper.php';
@@ -22,6 +25,7 @@ class FootballAutoWorkflow {
     private $scraper;
     private $poster;
     private $gemini_api_key;
+    private $grok_api_key;
     private $config;
     private $log_file;
 
@@ -37,8 +41,13 @@ class FootballAutoWorkflow {
             'page_access_token' => '',
             'facebook_api_version' => 'v20.0',
 
-            // Gemini AI
+            // Grok AI (xAI) - dùng để viết bài (ưu tiên)
+            'grok_api_key' => '',
+            'grok_model'   => 'grok-3-mini-fast',  // hoặc grok-3, grok-3-mini
+
+            // Gemini AI - dùng để tạo ảnh (Imagen) + fallback text
             'gemini_api_key' => '',
+            'gemini_model'   => 'gemini-2.5-flash-lite',
 
             // Scraper
             'max_articles' => 5,        // Số bài mỗi nguồn
@@ -58,6 +67,7 @@ class FootballAutoWorkflow {
         ], $config);
 
         $this->gemini_api_key = $this->config['gemini_api_key'];
+        $this->grok_api_key   = $this->config['grok_api_key'];
         $this->log_file = $this->config['log_file'];
 
         // Tạo thư mục
@@ -153,11 +163,11 @@ class FootballAutoWorkflow {
     private function createSummaryPost($compiled_content, $articles) {
         $results = [];
 
-        // ─── Tóm tắt bằng Gemini ───
-        $this->log("🤖 Đang gửi nội dung cho Gemini AI tóm tắt...");
+        // ─── Tóm tắt bằng AI (Grok ưu tiên → fallback Gemini) ───
+        $this->log("🤖 Đang gửi nội dung cho AI tóm tắt...");
 
         $summary_prompt = $this->buildSummaryPrompt($compiled_content);
-        $summary_result = $this->callGemini($summary_prompt);
+        $summary_result = $this->callAI($summary_prompt);
 
         if (!$summary_result['success']) {
             $this->log("❌ Lỗi khi tóm tắt: " . $summary_result['message']);
@@ -165,7 +175,7 @@ class FootballAutoWorkflow {
         }
 
         $facebook_post = $summary_result['text'];
-        $this->log("✅ Đã tạo bài đăng Facebook");
+        $this->log("✅ Đã tạo bài đăng Facebook (via " . $summary_result['provider'] . ")");
 
         // Lưu bài đăng ra file
         $this->saveOutput('summary_post', $facebook_post);
@@ -225,7 +235,7 @@ class FootballAutoWorkflow {
 
             // Tạo bài đăng
             $post_prompt = $this->buildSinglePostPrompt($article['title'], $content);
-            $post_result = $this->callGemini($post_prompt);
+            $post_result = $this->callAI($post_prompt);
 
             if (!$post_result['success']) {
                 $this->log("❌ Lỗi tạo bài cho: {$article['title']}");
@@ -342,11 +352,104 @@ Yêu cầu:
      */
 
     /**
-     * Gọi Gemini API để tạo text
+     * Dispatcher AI: thử Grok trước, fallback sang Gemini nếu Grok không có key hoặc lỗi
+     * Trả về ['success', 'text', 'provider']
+     */
+    private function callAI($prompt) {
+        // Ưu tiên Grok nếu có key
+        if (!empty($this->grok_api_key)) {
+            $result = $this->callGrok($prompt);
+            if ($result['success']) {
+                return $result;
+            }
+            $this->log("⚠️ Grok thất bại ({$result['message']}), thử Gemini...");
+        }
+
+        // Fallback Gemini
+        if (!empty($this->gemini_api_key)) {
+            $result = $this->callGemini($prompt);
+            if ($result['success']) {
+                return $result;
+            }
+            $this->log("⚠️ Gemini cũng thất bại: " . $result['message']);
+            return $result;
+        }
+
+        return ['success' => false, 'text' => '', 'provider' => 'none', 'message' => 'Không có AI key nào được cấu hình'];
+    }
+
+    /**
+     * Gọi Grok API (xAI) — OpenAI-compatible
+     */
+    private function callGrok($prompt) {
+        try {
+            $url = 'https://api.x.ai/v1/chat/completions';
+            $model = $this->config['grok_model'] ?? 'grok-3-mini-fast';
+
+            $data = [
+                'model' => $model,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'Bạn là chuyên gia content bóng đá Việt Nam. Viết bài đăng Facebook hấp dẫn, tự nhiên, giàu cảm xúc bằng tiếng Việt.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $prompt
+                    ]
+                ],
+                'temperature' => 0.8,
+                'max_tokens' => 1024,
+            ];
+
+            $ch = curl_init();
+            $json_data = json_encode($data);
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $json_data,
+                CURLOPT_TIMEOUT => 60,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $this->grok_api_key,
+                    'Content-Length: ' . strlen($json_data)
+                ]
+            ]);
+
+            $result = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($error) {
+                return ['success' => false, 'text' => '', 'provider' => 'grok', 'message' => "cURL: $error"];
+            }
+
+            $decoded = json_decode($result, true);
+
+            if ($http_code >= 200 && $http_code < 300 && isset($decoded['choices'][0]['message']['content'])) {
+                $text = trim($decoded['choices'][0]['message']['content']);
+                $this->log("✅ Grok ({$model}) tạo bài thành công");
+                return ['success' => true, 'text' => $text, 'provider' => 'grok'];
+            }
+
+            $err_msg = $decoded['error']['message'] ?? "HTTP $http_code";
+            return ['success' => false, 'text' => '', 'provider' => 'grok', 'message' => $err_msg];
+
+        } catch (Exception $e) {
+            return ['success' => false, 'text' => '', 'provider' => 'grok', 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Gọi Gemini API để tạo text (fallback)
      */
     private function callGemini($prompt) {
         try {
-            $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' . $this->gemini_api_key;
+            $model = $this->config['gemini_model'] ?? 'gemini-2.5-flash-lite';
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . $this->gemini_api_key;
 
             $data = [
                 'contents' => [
@@ -367,20 +470,21 @@ Yêu cầu:
             $response = $this->makeRequest($url, $data);
 
             if (!$response['success']) {
-                return ['success' => false, 'message' => $response['message']];
+                return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => $response['message']];
             }
 
             $result = $response['data'];
 
             if (isset($result['candidates'][0]['content']['parts'][0]['text'])) {
                 $text = trim($result['candidates'][0]['content']['parts'][0]['text']);
-                return ['success' => true, 'text' => $text];
+                $this->log("✅ Gemini ({$model}) tạo bài thành công");
+                return ['success' => true, 'text' => $text, 'provider' => 'gemini'];
             }
 
-            return ['success' => false, 'message' => 'Gemini không trả về kết quả'];
+            return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => 'Gemini không trả về kết quả'];
 
         } catch (Exception $e) {
-            return ['success' => false, 'message' => $e->getMessage()];
+            return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => $e->getMessage()];
         }
     }
 
@@ -611,12 +715,13 @@ Yêu cầu:
         $articles = $this->scraper->fetchAllNews();
         $compiled = $this->scraper->compileNewsContent($articles, $this->config['fetch_full_content']);
         $prompt = $this->buildSummaryPrompt($compiled);
-        $result = $this->callGemini($prompt);
+        $result = $this->callAI($prompt);
 
         return [
             'articles_count' => count($articles),
             'post_content' => $result['success'] ? $result['text'] : 'Lỗi: ' . $result['message'],
-            'status' => $result['success'] ? 'success' : 'error'
+            'status' => $result['success'] ? 'success' : 'error',
+            'ai_provider' => $result['provider'] ?? 'unknown'
         ];
     }
 }
