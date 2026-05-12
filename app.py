@@ -6,9 +6,14 @@ Chạy: python app.py
 Cài thư viện: pip install customtkinter pillow
 """
 
-import os, sys, json, subprocess, threading
+import os, sys, json, subprocess, threading, time
 from pathlib import Path
 from datetime import datetime
+try:
+    import schedule
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "schedule", "--quiet"], check=True)
+    import schedule
 
 try:
     import customtkinter as ctk
@@ -96,6 +101,7 @@ class App(ctk.CTk):
         menus = [
             ("dashboard",  "🏠  Dashboard"),
             ("post",       "✨  Tạo & Đăng bài"),
+            ("schedule",   "⏰  Lịch hẹn"),
             ("settings",   "⚙️   Cài đặt"),
             ("logs",       "📋  Nhật ký"),
         ]
@@ -124,7 +130,7 @@ class App(ctk.CTk):
 
         # Pages container
         self.pages = {}
-        for key in ["dashboard", "post", "settings", "logs"]:
+        for key in ["dashboard", "post", "schedule", "settings", "logs"]:
             frame = ctk.CTkScrollableFrame(self.content, fg_color="#0d1117",
                                             scrollbar_button_color="#30363d")
             frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
@@ -133,8 +139,11 @@ class App(ctk.CTk):
 
         self._build_dashboard()
         self._build_post()
+        self._build_schedule()
         self._build_settings()
         self._build_logs()
+        self._sched_running = False
+        self._start_scheduler_thread()
 
     def _show_page(self, key):
         for k, f in self.pages.items():
@@ -251,77 +260,217 @@ class App(ctk.CTk):
         ctk.CTkLabel(p, text="✨  Tạo & Đăng bài", font=ctk.CTkFont(size=20, weight="bold"),
                      text_color="#e6edf3").pack(anchor="w", padx=20, pady=(20,16))
 
-        # Buttons
-        bf = self._card(p, "🎛️ Điều khiển")
+        # ── Chrome control ──
+        cc = self._card(p, "🌐 Chrome")
+        crow = ctk.CTkFrame(cc, fg_color="transparent")
+        crow.pack(fill="x", padx=16, pady=(0,14))
+        ctk.CTkButton(crow, text="🟢  Mở Chrome & Facebook", width=210, height=36,
+                      font=ctk.CTkFont(size=13), fg_color="#1f6feb", hover_color="#388bfd",
+                      command=self._open_chrome).pack(side="left", padx=(0,10))
+        self.chrome_status_lbl = ctk.CTkLabel(crow, text="", font=ctk.CTkFont(size=12), text_color="#8b949e")
+        self.chrome_status_lbl.pack(side="left")
+
+        # ── Workflow ──
+        bf = self._card(p, "🎛️ Quy trình")
+
+        # Full one-click
+        full_row = ctk.CTkFrame(bf, fg_color="#0d1117", corner_radius=8)
+        full_row.pack(fill="x", padx=16, pady=(0,10))
+        ctk.CTkLabel(full_row, text="⚡ Chạy toàn bộ (1 click)",
+                     font=ctk.CTkFont(size=12, weight="bold"), text_color="#e6edf3").pack(side="left", padx=12, pady=10)
+        self.btn_full = ctk.CTkButton(full_row, text="🚀  CHẠY NGAY", width=140, height=34,
+                                      font=ctk.CTkFont(size=13, weight="bold"),
+                                      fg_color="#238636", hover_color="#2ea043",
+                                      command=self._run_full_workflow)
+        self.btn_full.pack(side="right", padx=12, pady=10)
+
+        ctk.CTkLabel(bf, text="— hoặc từng bước —", font=ctk.CTkFont(size=11),
+                     text_color="#484f58").pack(pady=(0,8))
+
         row = ctk.CTkFrame(bf, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(0,14))
-
-        self.btn_preview  = ctk.CTkButton(row, text="👁  Xem trước tin", width=160, height=38,
-                                           font=ctk.CTkFont(size=13),
-                                           fg_color="#21262d", hover_color="#30363d",
+        self.btn_preview  = ctk.CTkButton(row, text="👁  Xem trước tin", width=150, height=36,
+                                           font=ctk.CTkFont(size=12), fg_color="#21262d", hover_color="#30363d",
                                            command=lambda: self._run_post_action("preview"))
         self.btn_preview.pack(side="left", padx=(0,8))
-
-        self.btn_generate = ctk.CTkButton(row, text="✨  Tạo bài (AI)", width=160, height=38,
-                                           font=ctk.CTkFont(size=13),
-                                           fg_color="#1f6feb", hover_color="#388bfd",
+        self.btn_generate = ctk.CTkButton(row, text="✨  Tạo bài (AI)", width=150, height=36,
+                                           font=ctk.CTkFont(size=12), fg_color="#1f6feb", hover_color="#388bfd",
                                            command=lambda: self._run_post_action("generate"))
         self.btn_generate.pack(side="left", padx=(0,8))
-
-        self.btn_chrome   = ctk.CTkButton(row, text="🚀  Đăng qua Chrome", width=180, height=38,
-                                           font=ctk.CTkFont(size=13),
-                                           fg_color="#238636", hover_color="#2ea043",
+        self.btn_chrome   = ctk.CTkButton(row, text="📤  Đăng qua Chrome", width=160, height=36,
+                                           font=ctk.CTkFont(size=12), fg_color="#6e40c9", hover_color="#8957e5",
                                            command=lambda: self._run_post_action("chrome"))
         self.btn_chrome.pack(side="left")
 
-        # Progress label
-        self.post_status = ctk.CTkLabel(bf, text="", font=ctk.CTkFont(size=12),
-                                         text_color="#8b949e")
+        self.post_status = ctk.CTkLabel(bf, text="", font=ctk.CTkFont(size=12), text_color="#8b949e")
         self.post_status.pack(anchor="w", padx=16, pady=(0,6))
 
         # Output
         oc = self._card(p, "📤 Output")
-        self.post_output = ctk.CTkTextbox(oc, height=380, font=ctk.CTkFont(size=11, family="Courier New"),
-                                          fg_color="#010409", text_color="#7ee787",
-                                          border_width=0)
+        self.post_output = ctk.CTkTextbox(oc, height=340, font=ctk.CTkFont(size=11, family="Courier New"),
+                                          fg_color="#010409", text_color="#7ee787", border_width=0)
         self.post_output.pack(fill="both", padx=16, pady=(0,14), expand=True)
         self.post_output.insert("end", "Nhấn một nút ở trên để bắt đầu...\n")
         self.post_output.configure(state="disabled")
 
-    def _run_post_action(self, action):
-        btns = [self.btn_preview, self.btn_generate, self.btn_chrome]
-        for b in btns: b.configure(state="disabled")
+    def _open_chrome(self):
+        """Mở Chrome với remote debugging"""
+        bat = BASE / "mo_chrome.bat"
+        subprocess.Popen(["cmd", "/c", str(bat)], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        self.chrome_status_lbl.configure(text="⏳ Đang mở Chrome...", text_color="#d29922")
+        self.after(4000, lambda: self.chrome_status_lbl.configure(
+            text="✅ Chrome đã mở — hãy đăng nhập Facebook" if check_chrome() else "⚠️ Chưa kết nối được",
+            text_color="#3fb950" if check_chrome() else "#d29922"
+        ))
 
-        labels = {"preview":"Đang lấy tin tức...", "generate":"AI đang tạo bài...", "chrome":"Đang đăng qua Chrome..."}
-        self.post_status.configure(text=f"⏳ {labels.get(action,'...')}", text_color="#d29922")
-
+    def _run_full_workflow(self):
+        """Chạy toàn bộ: PHP scrape+AI → Chrome post"""
+        all_btns = [self.btn_full, self.btn_preview, self.btn_generate, self.btn_chrome]
+        for b in all_btns: b.configure(state="disabled")
+        self.post_status.configure(text="⏳ Đang chạy toàn bộ quy trình...", text_color="#d29922")
         self.post_output.configure(state="normal")
-        self.post_output.delete("1.0","end")
-        self.post_output.insert("end", f"▶ Bắt đầu: {action} lúc {datetime.now().strftime('%H:%M:%S')}\n\n")
+        self.post_output.delete("1.0", "end")
+        self.post_output.insert("end", f"🚀 BẮT ĐẦU TOÀN BỘ QUY TRÌNH — {datetime.now().strftime('%H:%M:%S')}\n")
+        self.post_output.insert("end", "=" * 50 + "\n\n")
         self.post_output.configure(state="disabled")
 
-        if action == "preview":
-            cmd = [PHP, str(BASE/"run_football_post.php"), "preview-post"]
-        elif action == "generate":
-            cmd = [PHP, str(BASE/"run_football_post.php")]
-        else:
+        def _full_run():
             py_path = r"C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe"
-            cmd = [py_path, str(BASE/"chrome_poster.py")]
+            steps = [
+                ("📰 Bước 1: Thu thập tin + AI tạo bài",
+                 [PHP, str(BASE/"run_football_post.php"), "preview-post"]),
+                ("📤 Bước 2: Đăng lên Facebook qua Chrome",
+                 [py_path, str(BASE/"chrome_poster.py")]),
+            ]
+            final_ok = True
+            for label, cmd in steps:
+                def _add(t):
+                    self.after(0, lambda txt=t: [
+                        self.post_output.configure(state="normal"),
+                        self.post_output.insert("end", txt),
+                        self.post_output.see("end"),
+                        self.post_output.configure(state="disabled")
+                    ])
+                _add(f"\n{'─'*40}\n{label}\n{'─'*40}\n")
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True,
+                                       cwd=str(BASE), timeout=180)
+                    _add(r.stdout + r.stderr)
+                    if r.returncode != 0:
+                        final_ok = False
+                        break
+                except Exception as e:
+                    _add(f"\n❌ Lỗi: {e}\n")
+                    final_ok = False; break
 
+            def _done():
+                self.post_status.configure(
+                    text="✅ Đã đăng bài thành công!" if final_ok else "❌ Có lỗi — xem output",
+                    text_color="#3fb950" if final_ok else "#da3633"
+                )
+                for b in all_btns: b.configure(state="normal")
+                self._refresh_dashboard()
+            self.after(0, _done)
+
+        threading.Thread(target=_full_run, daemon=True).start()
+
+    def _run_post_action(self, action):
+        btns = [self.btn_full, self.btn_preview, self.btn_generate, self.btn_chrome]
+        for b in btns: b.configure(state="disabled")
+        labels = {"preview": "Đang lấy tin tức...", "generate": "AI đang tạo bài...", "chrome": "Đang đăng qua Chrome..."}
+        self.post_status.configure(text=f"⏳ {labels.get(action)}", text_color="#d29922")
+        self.post_output.configure(state="normal")
+        self.post_output.delete("1.0", "end")
+        self.post_output.insert("end", f"▶ {datetime.now().strftime('%H:%M:%S')} — {action}\n\n")
+        self.post_output.configure(state="disabled")
+        py_path = r"C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe"
+        cmd_map = {
+            "preview":  [PHP, str(BASE/"run_football_post.php"), "preview-post"],
+            "generate": [PHP, str(BASE/"run_football_post.php")],
+            "chrome":   [py_path, str(BASE/"chrome_poster.py")],
+        }
         def on_done(out, ok):
-            def _update():
+            def _u():
                 self.post_output.configure(state="normal")
                 self.post_output.insert("end", out)
                 self.post_output.see("end")
                 self.post_output.configure(state="disabled")
-                self.post_status.configure(
-                    text="✅ Hoàn thành!" if ok else "❌ Có lỗi xảy ra",
-                    text_color="#3fb950" if ok else "#da3633"
-                )
+                self.post_status.configure(text="✅ Hoàn thành!" if ok else "❌ Lỗi",
+                                            text_color="#3fb950" if ok else "#da3633")
                 for b in btns: b.configure(state="normal")
-            self.after(0, _update)
+            self.after(0, _u)
+        run_cmd(cmd_map[action], on_done)
 
-        run_cmd(cmd, on_done)
+    # ════════════ SCHEDULE ════════════
+    def _build_schedule(self):
+        p = self.pages["schedule"]
+        ctk.CTkLabel(p, text="⏰  Lịch hẹn tự động", font=ctk.CTkFont(size=20, weight="bold"),
+                     text_color="#e6edf3").pack(anchor="w", padx=20, pady=(20,4))
+        ctk.CTkLabel(p, text="Thiết lập giờ tự động chạy toàn bộ quy trình mỗi ngày",
+                     font=ctk.CTkFont(size=12), text_color="#8b949e").pack(anchor="w", padx=20, pady=(0,16))
+
+        sc = self._card(p, "🕐 Giờ đăng bài tự động")
+        self._sched_entries = []
+        default_times = ["07:00", "13:00", "20:00"]
+        for t in default_times:
+            row = ctk.CTkFrame(sc, fg_color="transparent")
+            row.pack(fill="x", padx=16, pady=4)
+            ctk.CTkLabel(row, text="🕐", font=ctk.CTkFont(size=14)).pack(side="left", padx=(0,8))
+            e = ctk.CTkEntry(row, width=80, height=34, font=ctk.CTkFont(size=13),
+                             fg_color="#0d1117", border_color="#30363d")
+            e.insert(0, t)
+            e.pack(side="left")
+            ctk.CTkLabel(row, text="(HH:MM)", font=ctk.CTkFont(size=11),
+                         text_color="#484f58").pack(side="left", padx=8)
+            self._sched_entries.append(e)
+
+        btn_row = ctk.CTkFrame(sc, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(8,14))
+        ctk.CTkButton(btn_row, text="✅  Bật lịch hẹn", width=150, height=36,
+                      font=ctk.CTkFont(size=13), fg_color="#238636", hover_color="#2ea043",
+                      command=self._apply_schedule).pack(side="left", padx=(0,10))
+        ctk.CTkButton(btn_row, text="⛔  Tắt lịch hẹn", width=150, height=36,
+                      font=ctk.CTkFont(size=13), fg_color="#da3633", hover_color="#f85149",
+                      command=self._cancel_schedule).pack(side="left")
+
+        self.sched_status = ctk.CTkLabel(sc, text="● Chưa bật lịch hẹn",
+                                          font=ctk.CTkFont(size=12), text_color="#8b949e")
+        self.sched_status.pack(anchor="w", padx=16, pady=(0,8))
+
+        # Next run preview
+        nc = self._card(p, "📅 Lần chạy tiếp theo")
+        self.next_run_lbl = ctk.CTkLabel(nc, text="Chưa có lịch",
+                                          font=ctk.CTkFont(size=13), text_color="#8b949e")
+        self.next_run_lbl.pack(anchor="w", padx=16, pady=(0,14))
+
+    def _apply_schedule(self):
+        schedule.clear()
+        times = [e.get().strip() for e in self._sched_entries if e.get().strip()]
+        for t in times:
+            schedule.every().day.at(t).do(self._run_full_workflow)
+        self._sched_running = True
+        self.sched_status.configure(
+            text=f"✅ Đang chạy — lịch: {', '.join(times)}", text_color="#3fb950")
+        self._update_next_run()
+
+    def _cancel_schedule(self):
+        schedule.clear()
+        self._sched_running = False
+        self.sched_status.configure(text="⛔ Đã tắt lịch hẹn", text_color="#da3633")
+        self.next_run_lbl.configure(text="Không có lịch")
+
+    def _update_next_run(self):
+        nj = schedule.next_run()
+        if nj:
+            self.next_run_lbl.configure(
+                text=f"⏰ {nj.strftime('%H:%M  %d/%m/%Y')}", text_color="#e6edf3")
+
+    def _start_scheduler_thread(self):
+        def _loop():
+            while True:
+                schedule.run_pending()
+                time.sleep(30)
+        threading.Thread(target=_loop, daemon=True).start()
 
     # ════════════ SETTINGS ════════════
     def _build_settings(self):
@@ -455,6 +604,16 @@ class App(ctk.CTk):
         self._refresh_dashboard()
         if self.current_page == "logs":
             self._load_logs()
+        if self.current_page == "schedule" and self._sched_running:
+            self._update_next_run()
+        # Cập nhật trạng thái Chrome trên trang Post
+        try:
+            ok = check_chrome()
+            self.chrome_status_lbl.configure(
+                text="✅ Chrome đã kết nối" if ok else "⚠️ Chrome chưa kết nối — nhấn Mở Chrome",
+                text_color="#3fb950" if ok else "#8b949e"
+            )
+        except: pass
         self.after(10000, self._refresh_loop)
 
 
