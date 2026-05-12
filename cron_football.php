@@ -9,7 +9,7 @@
  *   0 7,12,20 * * * /usr/bin/php /path/to/cron_football.php
  * 
  *   # Đăng mỗi 4 tiếng
- *   0 */4 * * * /usr/bin/php /path/to/cron_football.php
+ *   0 * /4 * * * /usr/bin/php /path/to/cron_football.php
  * 
  *   # Đăng 1 lần mỗi ngày lúc 8h sáng
  *   0 8 * * * /usr/bin/php /path/to/cron_football.php

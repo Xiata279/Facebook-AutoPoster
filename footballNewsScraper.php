@@ -45,10 +45,16 @@ class FootballNewsScraper {
 
         // Cấu hình các nguồn tin
         $this->sources = [
-            'vnexpress' => [
-                'name' => 'VnExpress Bóng đá',
+            'vnexpress_thethao' => [
+                'name' => 'VnExpress Thể thao',
                 'type' => 'rss',
-                'url' => 'https://vnexpress.net/rss/bong-da.rss',
+                'url' => 'https://vnexpress.net/rss/the-thao.rss',
+                'encoding' => 'UTF-8'
+            ],
+            'vnexpress_quocte' => [
+                'name' => 'VnExpress Bóng đá Quốc tế',
+                'type' => 'rss',
+                'url' => 'https://vnexpress.net/rss/bong-da-quoc-te.rss',
                 'encoding' => 'UTF-8'
             ],
             '24h' => [
