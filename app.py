@@ -174,10 +174,10 @@ class App(ctk.CTk):
 
         self.stat_cards = {}
         stats = [
-            ("chrome",  "🌐 Chrome",    "Kiểm tra..."),
-            ("fb_page", "📘 Page ID",   "Chưa có"),
-            ("grok",    "🟣 Grok AI",   "Chưa có"),
-            ("gemini",  "🔵 Gemini AI", "Chưa có"),
+            ("chrome",   "🌐 Chrome",      "Kiểm tra..."),
+            ("fb_pages", "📘 Trang FB",    "Chưa có"),
+            ("grok",     "🟣 Grok AI",     "Chưa có"),
+            ("gemini",   "🔵 Gemini AI",   "Chưa có"),
         ]
         for i, (k, title, default) in enumerate(stats):
             card = ctk.CTkFrame(sf, corner_radius=10, fg_color="#161b22",
@@ -218,9 +218,11 @@ class App(ctk.CTk):
         env = read_env()
         def key_ok(v): return bool(v) and "THAY" not in v
 
-        self.stat_cards["fb_page"].configure(
-            text=env.get("FB_PAGE_ID", "—") if key_ok(env.get("FB_PAGE_ID","")) else "❌ Chưa thiết lập",
-            text_color="#e6edf3" if key_ok(env.get("FB_PAGE_ID","")) else "#da3633"
+        pages_val = env.get("FB_PAGES", "")
+        pages_count = len([x for x in pages_val.split(",") if x.strip() and "THAY" not in x]) if pages_val else 0
+        self.stat_cards["fb_pages"].configure(
+            text=f"✅ {pages_count} trang" if pages_count else "❌ Chưa thiết lập",
+            text_color="#3fb950" if pages_count else "#da3633"
         )
         self.stat_cards["grok"].configure(
             text="✅ Đã thiết lập" if key_ok(env.get("GROK_API_KEY","")) else "❌ Chưa có",
@@ -303,7 +305,8 @@ class App(ctk.CTk):
         elif action == "generate":
             cmd = [PHP, str(BASE/"run_football_post.php")]
         else:
-            cmd = [PY, str(BASE/"chrome_poster.py")]
+            py_path = r"C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe"
+            cmd = [py_path, str(BASE/"chrome_poster.py")]
 
         def on_done(out, ok):
             def _update():
@@ -328,9 +331,9 @@ class App(ctk.CTk):
 
         self.setting_fields = {}
         sections = [
-            ("📘 Facebook", [
-                ("FB_PAGE_ID",       "Page ID",          "VD: 123456789012345"),
-                ("FB_ACCESS_TOKEN",  "Access Token",     "EAABxx..."),
+            ("📘 Facebook — Danh sách trang đăng bài", [
+                ("FB_PAGES", "Trang Facebook (ngăn cách bằng dấu phẩy)",
+                 "VD: myfanpage,another.page hoặc https://facebook.com/page"),
             ]),
             ("🟣 Grok AI (xAI)", [
                 ("GROK_API_KEY",  "API Key", "xai-..."),
@@ -348,11 +351,19 @@ class App(ctk.CTk):
             for key, label, placeholder in fields:
                 ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=12),
                              text_color="#8b949e").pack(anchor="w", padx=16, pady=(6,2))
-                show = "*" if "TOKEN" in key or "KEY" in key else None
-                entry = ctk.CTkEntry(card, placeholder_text=placeholder,
-                                     show=show,
-                                     font=ctk.CTkFont(size=12), height=36,
-                                     fg_color="#0d1117", border_color="#30363d")
+                # FB_PAGES: text area lớn hơn để nhập nhiều trang
+                if key == "FB_PAGES":
+                    entry = ctk.CTkEntry(card, placeholder_text=placeholder,
+                                         font=ctk.CTkFont(size=12), height=38,
+                                         fg_color="#0d1117", border_color="#30363d")
+                    ctk.CTkLabel(card, text="💡 Mỗi slug cách nhau bằng dấu phẩy. VD: page1,page2,page3",
+                                 font=ctk.CTkFont(size=10), text_color="#484f58").pack(anchor="w", padx=16)
+                else:
+                    show = "*" if "TOKEN" in key or "KEY" in key else None
+                    entry = ctk.CTkEntry(card, placeholder_text=placeholder,
+                                         show=show,
+                                         font=ctk.CTkFont(size=12), height=36,
+                                         fg_color="#0d1117", border_color="#30363d")
                 entry.pack(fill="x", padx=16, pady=(0,4))
                 val = env.get(key, "")
                 if val and "THAY" not in val:
