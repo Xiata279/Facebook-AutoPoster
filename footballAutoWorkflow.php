@@ -663,12 +663,26 @@ Yêu cầu:
      */
 
     /**
-     * Lưu output ra file
+     * Lưu output ra file txt + json (để Python chrome_poster.py đọc)
      */
     private function saveOutput($name, $content) {
-        $filename = $this->config['output_dir'] . $name . '_' . date('Ymd_His') . '.txt';
-        file_put_contents($filename, $content);
-        $this->log("💾 Đã lưu output: $filename");
+        $timestamp = date('Ymd_His');
+
+        // Lưu txt
+        $txt_file = $this->config['output_dir'] . $name . '_' . $timestamp . '.txt';
+        file_put_contents($txt_file, $content);
+
+        // Lưu JSON (chrome_poster.py sẽ đọc file này)
+        $json_file = $this->config['output_dir'] . 'latest_post.json';
+        $json_data = json_encode([
+            'post_content' => $content,
+            'timestamp'    => date('Y-m-d H:i:s'),
+            'source_file'  => basename($txt_file),
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        file_put_contents($json_file, $json_data);
+
+        $this->log("💾 Đã lưu output: $txt_file");
+        $this->log("📋 JSON sẵn sàng cho Chrome poster: $json_file");
     }
 
     /**
