@@ -1,8 +1,43 @@
-/logs/
-/cache/
-/output/
-/images/ai_generated_*
-/images/football_news_*
-facebook_poster.log
+# ==========================================
+# Facebook Auto Poster - .gitignore
+# ==========================================
+
+# Credentials & secrets
 .env
+
+# Runtime directories (generated at runtime)
+chrome_profile/
+output/
+logs/
+cache/
+
+# Dashboard (served via XAMPP, not needed in repo)
+dashboard/
+
+# Unnecessary files
+task_scheduler.xml
+images/ai_generated_*
+images/football_news_*
+images/*.txt
+facebook_poster.log
+
+# PHP test files
 test_*.php
+*_test.php
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
