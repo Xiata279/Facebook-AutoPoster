@@ -49,7 +49,7 @@ if %errorlevel% neq 0 (
 python -c "import selenium" >nul 2>&1
 if %errorlevel% neq 0 (
     echo 📦 Đang cài selenium + webdriver-manager...
-    pip install selenium webdriver-manager
+    C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe -m pip install selenium webdriver-manager
 )
 echo ✅ Python và Selenium sẵn sàng
 echo.
@@ -57,7 +57,7 @@ echo.
 :: ─── BƯỚC 4: Python đăng lên Facebook qua Chrome ───
 echo [4/4] Đang đăng bài lên Facebook qua Chrome...
 echo.
-python chrome_poster.py
+C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe chrome_poster.py
 
 echo.
 echo ═══════════════════════════════════════
