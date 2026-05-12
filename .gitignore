@@ -1,0 +1,7 @@
+/logs/
+/cache/
+/output/
+/images/ai_generated_*
+/images/football_news_*
+facebook_poster.log
+.env
