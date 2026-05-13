@@ -48,7 +48,8 @@ $config = [
     // ─── Cấu hình Bài đăng ───
     'post_style'         => 'tong_hop',
     'max_posts'          => 1,
-    'generate_image'     => false,
+    // Bật tạo ảnh nếu có Gemini key
+    'generate_image'     => !empty($env['GEMINI_API_KEY']) && strpos($env['GEMINI_API_KEY'], 'THAY') === false,
 
     // ─── Thư mục ───
     'image_folder'       => __DIR__ . '/images/',
@@ -56,6 +57,12 @@ $config = [
     'cache_dir'          => __DIR__ . '/cache/',
     'output_dir'         => __DIR__ . '/output/',
 ];
+
+// Tự động tạo thư mục cần thiết
+foreach (['images', 'logs', 'cache', 'output'] as $dir) {
+    $path = __DIR__ . '/' . $dir;
+    if (!is_dir($path)) { mkdir($path, 0755, true); }
+}
 
 // ═══════════════════════════════════════════════════════
 //  CHẠY

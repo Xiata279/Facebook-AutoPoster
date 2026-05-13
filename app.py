@@ -31,9 +31,25 @@ except ImportError:
     from PIL import Image
     HAS_PIL = True
 
-# ── Cấu hình ──
+# ── Cấu hình giao diện 2026 ──
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+# Palette màu 2026 Deep Space
+C = {
+    "bg":       "#050b18",   # Nền chính (deep space)
+    "sidebar":  "#070e1f",   # Sidebar
+    "card":     "#0a1628",   # Card
+    "card2":    "#0d1e35",   # Card hover
+    "border":   "#1a3a5c",   # Viền card
+    "text":     "#e2e8f0",   # Chữ chính
+    "muted":    "#4a6080",   # Chữ mờ
+    "accent":   "#0ea5e9",   # Xanh cyan néon
+    "accent2":  "#6366f1",   # Tím indigo
+    "green":    "#10b981",   # Xanh lá thành công
+    "red":      "#ef4444",   # Đỏ lỗi
+    "yellow":   "#f59e0b",   # Vàng cảnh báo
+}
 
 BASE = Path(__file__).parent
 PY   = sys.executable
@@ -145,7 +161,7 @@ class App(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         # Sidebar
-        self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color="#0d1421")
+        self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color=C["sidebar"])
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
@@ -167,12 +183,12 @@ class App(ctk.CTk):
             ctk.CTkLabel(self.sidebar, text="⚽", font=ctk.CTkFont(size=36)).pack(pady=(18, 4))
 
         ctk.CTkLabel(self.sidebar, text="AutoPoster Pro",
-                     font=ctk.CTkFont(size=14, weight="bold"), text_color="#e2e8f0").pack(pady=(0, 2))
+                     font=ctk.CTkFont(size=13, weight="bold"), text_color=C["text"]).pack(pady=(0, 2))
         ctk.CTkLabel(self.sidebar, text=f"Xiata  ·  {VERSION}",
-                     font=ctk.CTkFont(size=10), text_color="#4a5568").pack(pady=(0, 16))
+                     font=ctk.CTkFont(size=10), text_color=C["muted"]).pack(pady=(0, 16))
 
         ctk.CTkLabel(self.sidebar, text="NAVIGATION", font=ctk.CTkFont(size=9, weight="bold"),
-                     text_color="#2d3748").pack(anchor="w", padx=20, pady=(0,6))
+                     text_color="#1e3a5f").pack(anchor="w", padx=20, pady=(0,6))
 
         self.nav_buttons = {}
         menus = [
@@ -187,8 +203,8 @@ class App(ctk.CTk):
             btn = ctk.CTkButton(
                 self.sidebar, text=label, anchor="w",
                 font=ctk.CTkFont(size=12),
-                fg_color="transparent", hover_color="#1a2035",
-                text_color="#94a3b8", height=38, corner_radius=6,
+                fg_color="transparent", hover_color="#0d2044",
+                text_color=C["muted"], height=38, corner_radius=6,
                 command=lambda k=key: self._show_page(k)
             )
             btn.pack(fill="x", padx=10, pady=1)
@@ -200,19 +216,19 @@ class App(ctk.CTk):
         self.btn_theme = ctk.CTkButton(
             self.sidebar, text="☀  Chế độ Sáng", height=32,
             font=ctk.CTkFont(size=10),
-            fg_color="transparent", border_width=1, border_color="#1e293b",
-            hover_color="#1a2035", text_color="#4a5568",
+            fg_color="transparent", border_width=1, border_color="#1a3a5c",
+            hover_color="#0d2044", text_color=C["muted"],
             command=self._toggle_theme
         )
         self.btn_theme.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
 
         # Trạng thái Chrome ở dưới sidebar
-        self.chrome_label = ctk.CTkLabel(self.sidebar, text="●  Chrome: checking",
-                                          font=ctk.CTkFont(size=10), text_color="#2d3748")
+        self.chrome_label = ctk.CTkLabel(self.sidebar, text="●  Chrome: offline",
+                                          font=ctk.CTkFont(size=10), text_color="#1e3a5f")
         self.chrome_label.pack(side="bottom", pady=(4, 8), padx=12)
 
         # Content area
-        self.content = ctk.CTkFrame(self, corner_radius=0, fg_color="#070d1a")
+        self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=C["bg"])
         self.content.grid(row=0, column=1, sticky="nsew")
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
@@ -220,8 +236,8 @@ class App(ctk.CTk):
         # Pages container
         self.pages = {}
         for key in ["dashboard", "post", "schedule", "chat", "settings", "logs"]:
-            frame = ctk.CTkScrollableFrame(self.content, fg_color="#070d1a",
-                                            scrollbar_button_color="#1e293b")
+            frame = ctk.CTkScrollableFrame(self.content, fg_color=C["bg"],
+                                            scrollbar_button_color="#1a3a5c")
             frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
             frame.grid_remove()
             self.pages[key] = frame
@@ -244,8 +260,8 @@ class App(ctk.CTk):
 
         # Highlight nav button
         for k, btn in self.nav_buttons.items():
-            btn.configure(fg_color="#1a2035" if k == key else "transparent",
-                          text_color="#e2e8f0" if k == key else "#94a3b8")
+            btn.configure(fg_color="#0d2044" if k == key else "transparent",
+                          text_color=C["accent"] if k == key else C["muted"])
 
     # ─── Chuyển sáng / tối ───
     def _toggle_theme(self):
@@ -259,22 +275,22 @@ class App(ctk.CTk):
 
     # ─── Card helper ───
     def _card(self, parent, title="", pady=(0,12)):
-        f = ctk.CTkFrame(parent, corner_radius=8, fg_color="#0f1729",
-                         border_width=1, border_color="#1e293b")
+        f = ctk.CTkFrame(parent, corner_radius=10, fg_color=C["card"],
+                         border_width=1, border_color=C["border"])
         f.pack(fill="x", padx=20, pady=pady)
         if title:
-            ctk.CTkLabel(f, text=title, font=ctk.CTkFont(size=11, weight="bold"),
-                         text_color="#4a5568").pack(anchor="w", padx=16, pady=(14,4))
+            ctk.CTkLabel(f, text=title, font=ctk.CTkFont(size=10, weight="bold"),
+                         text_color=C["muted"]).pack(anchor="w", padx=16, pady=(14,4))
         return f
 
     # ════════════ DASHBOARD ════════════
     def _build_dashboard(self):
         p = self.pages["dashboard"]
 
-        ctk.CTkLabel(p, text="Overview", font=ctk.CTkFont(size=22, weight="bold"),
-                     text_color="#e2e8f0").pack(anchor="w", padx=24, pady=(24,2))
+        ctk.CTkLabel(p, text="Overview", font=ctk.CTkFont(size=24, weight="bold"),
+                     text_color=C["text"]).pack(anchor="w", padx=24, pady=(24,2))
         self.dash_time = ctk.CTkLabel(p, text="", font=ctk.CTkFont(size=11),
-                                       text_color="#2d3748")
+                                       text_color=C["muted"])
         self.dash_time.pack(anchor="w", padx=24, pady=(0,16))
 
         # Status row
@@ -290,24 +306,24 @@ class App(ctk.CTk):
             ("gemini",   "GEMINI AI", "Not set"),
         ]
         for i, (k, title, default) in enumerate(stats):
-            card = ctk.CTkFrame(sf, corner_radius=8, fg_color="#0f1729",
-                                border_width=1, border_color="#1e293b", height=90)
+            card = ctk.CTkFrame(sf, corner_radius=10, fg_color=C["card"],
+                                border_width=1, border_color=C["border"], height=90)
             card.grid(row=0, column=i, padx=5, sticky="ew")
             card.grid_propagate(False)
             ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=9, weight="bold"),
-                         text_color="#2d3748").pack(anchor="w", padx=14, pady=(14,2))
+                         text_color=C["muted"]).pack(anchor="w", padx=14, pady=(14,2))
             lbl = ctk.CTkLabel(card, text=default, font=ctk.CTkFont(size=12, weight="bold"),
-                               text_color="#e2e8f0")
+                               text_color=C["text"])
             lbl.pack(anchor="w", padx=14)
             self.stat_cards[k] = lbl
 
         # Latest post
         c2 = self._card(p, "LATEST POST")
         self.latest_post_lbl = ctk.CTkTextbox(c2, height=160, font=ctk.CTkFont(size=12),
-                                               fg_color="#070d1a", text_color="#94a3b8",
+                                               fg_color=C["bg"], text_color="#94a3b8",
                                                border_width=0)
         self.latest_post_lbl.pack(fill="x", padx=16, pady=(0,14))
-        self.latest_post_lbl.insert("end", "No posts yet. Go to 'Post' tab to get started.")
+        self.latest_post_lbl.insert("end", "No posts yet. Go to Post tab to get started.")
         self.latest_post_lbl.configure(state="disabled")
 
     def _refresh_dashboard(self):
