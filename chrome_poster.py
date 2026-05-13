@@ -20,6 +20,16 @@ import os, sys, json, time, argparse, socket
 from pathlib import Path
 from datetime import datetime
 
+# Fix UnicodeEncodeError trên Windows console (cp1252 → utf-8)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -61,7 +71,10 @@ def log(msg: str, level="info"):
     ts    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{ts}] {msg}"
     col   = {"info": CYAN, "ok": GREEN, "warn": YELLOW, "error": RED}.get(level, str)
-    print(col(entry))
+    try:
+        print(col(entry))
+    except UnicodeEncodeError:
+        print(col(entry).encode("ascii", errors="replace").decode("ascii"))
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(entry + "\n")

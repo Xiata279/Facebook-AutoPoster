@@ -78,7 +78,11 @@ def run_cmd(cmd, callback):
     """Chạy lệnh nền, callback(output, success)"""
     def _run():
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(BASE), timeout=120)
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", cwd=str(BASE), timeout=120, env=env)
             callback((r.stdout or "") + (r.stderr or ""), r.returncode == 0)
         except Exception as e:
             callback(str(e), False)
@@ -612,8 +616,12 @@ class App(ctk.CTk):
                     ])
                 _add(f"\n{'─'*40}\n{label}\n{'─'*40}\n")
                 try:
+                    _env = os.environ.copy()
+                    _env["PYTHONIOENCODING"] = "utf-8"
+                    _env["PYTHONUTF8"] = "1"
                     r = subprocess.run(cmd, capture_output=True, text=True,
-                                       cwd=str(BASE), timeout=180)
+                                       encoding="utf-8", errors="replace",
+                                       cwd=str(BASE), timeout=180, env=_env)
                     _add((r.stdout or "") + (r.stderr or ""))
                     if r.returncode != 0:
                         final_ok = False
