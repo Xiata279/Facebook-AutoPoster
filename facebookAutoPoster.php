@@ -16,7 +16,7 @@
  * - Easy configuration and usage
  * 
  * @author Xiata
- * @version 1.0.1
+ * @version 1.0.0
  */
 
 class FacebookAutoPoster {

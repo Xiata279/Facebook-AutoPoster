@@ -14,7 +14,7 @@
  * AI Image : Gemini Imagen
  * 
  * @author Xiata
- * @version 1.1.0
+ * @version 1.0.0
  */
 
 require_once __DIR__ . '/footballNewsScraper.php';

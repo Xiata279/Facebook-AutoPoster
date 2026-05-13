@@ -1,4 +1,4 @@
-<h1 align="center">Facebook Auto Poster</h1>
+<h1 align="center">Facebook Auto Poster V1.0.0</h1>
 
 <div align="center">
 
@@ -106,7 +106,8 @@ $config = [
     'ai_use'             => 2, // 1 = Chế độ AI, 2 = Chế độ Thủ công
     'gemini_api_key'     => 'GEMINI_KEY',
     'log_file'           => './logs/facebook_poster.log',
-    'facebook_api_version' => 'v20.0'
+    'facebook_api_version' => 'v20.0',
+    'app_version'          => 'V1.0.0'
 ];
 
 $poster = new FacebookAutoPoster($config);

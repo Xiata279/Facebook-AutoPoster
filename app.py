@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Football Auto Poster - Desktop App
+Football Auto Poster - Desktop App V1.0.0
 Chạy: python app.py
 Cài thư viện: pip install customtkinter pillow
 """
+
+VERSION = "V1.0.0"
 
 import os, sys, json, subprocess, threading, time, socket
 from pathlib import Path
@@ -94,7 +96,7 @@ def check_fb_logged_in(fb_url: str) -> bool:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("⚽ Football Auto Poster")
+        self.title(f"⚽ Football Auto Poster {VERSION}")
         self.geometry("1050x680")
         self.minsize(900, 600)
 
