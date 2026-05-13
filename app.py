@@ -6,7 +6,7 @@ Chạy: python app.py
 Cài thư viện: pip install customtkinter pillow
 """
 
-VERSION = "V1.0.0"
+VERSION = "V1.0.1"
 
 import os, sys, json, subprocess, threading, time, socket
 from pathlib import Path
@@ -22,6 +22,14 @@ try:
 except ImportError:
     subprocess.run([sys.executable, "-m", "pip", "install", "customtkinter", "pillow"], check=True)
     import customtkinter as ctk
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "pillow", "--quiet"], check=True)
+    from PIL import Image
+    HAS_PIL = True
 
 # ── Cấu hình ──
 ctk.set_appearance_mode("dark")
@@ -137,12 +145,25 @@ class App(ctk.CTk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
-        # Logo
-        logo = ctk.CTkLabel(self.sidebar, text="⚽ Auto Poster",
-                             font=ctk.CTkFont(size=18, weight="bold"), text_color="#e6edf3")
-        logo.pack(pady=(24, 4), padx=16)
-        ctk.CTkLabel(self.sidebar, text="by Xiata", font=ctk.CTkFont(size=11),
-                     text_color="#8b949e").pack(pady=(0,20))
+        # Logo ảnh Xiata
+        logo_path = BASE / "assets" / "logo.jpg"
+        self._logo_img = None
+        if logo_path.exists() and HAS_PIL:
+            try:
+                img = Image.open(logo_path)
+                img = img.resize((80, 80), Image.LANCZOS)
+                self._logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(80, 80))
+            except: pass
+
+        if self._logo_img:
+            ctk.CTkLabel(self.sidebar, image=self._logo_img, text="").pack(pady=(18, 4))
+        else:
+            ctk.CTkLabel(self.sidebar, text="⚽", font=ctk.CTkFont(size=36)).pack(pady=(18, 4))
+
+        ctk.CTkLabel(self.sidebar, text="⚽ Auto Poster",
+                     font=ctk.CTkFont(size=14, weight="bold"), text_color="#e6edf3").pack(pady=(0, 2))
+        ctk.CTkLabel(self.sidebar, text=f"by Xiata  •  {VERSION}",
+                     font=ctk.CTkFont(size=10), text_color="#8b949e").pack(pady=(0, 16))
 
         ctk.CTkLabel(self.sidebar, text="MENU", font=ctk.CTkFont(size=10, weight="bold"),
                      text_color="#484f58").pack(anchor="w", padx=20, pady=(0,6))
@@ -167,11 +188,22 @@ class App(ctk.CTk):
             btn.pack(fill="x", padx=10, pady=2)
             self.nav_buttons[key] = btn
 
-        # Trạng thái Chrome ở dưới sidebar
+        # Nút chuyển sáng/tối
         self.sidebar.pack_propagate(False)
+        self._is_dark = True
+        self.btn_theme = ctk.CTkButton(
+            self.sidebar, text="☀️  Chế độ Sáng", height=34,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent", border_width=1, border_color="#30363d",
+            hover_color="#21262d", text_color="#8b949e",
+            command=self._toggle_theme
+        )
+        self.btn_theme.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
+
+        # Trạng thái Chrome ở dưới sidebar
         self.chrome_label = ctk.CTkLabel(self.sidebar, text="● Chrome: Đang kiểm tra",
                                           font=ctk.CTkFont(size=11), text_color="#8b949e")
-        self.chrome_label.pack(side="bottom", pady=16, padx=12)
+        self.chrome_label.pack(side="bottom", pady=(4, 8), padx=12)
 
         # Content area
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color="#0d1117")
@@ -208,6 +240,16 @@ class App(ctk.CTk):
         for k, btn in self.nav_buttons.items():
             btn.configure(fg_color="#21262d" if k == key else "transparent",
                           text_color="#ffffff" if k == key else "#c9d1d9")
+
+    # ─── Chuyển sáng / tối ───
+    def _toggle_theme(self):
+        self._is_dark = not self._is_dark
+        if self._is_dark:
+            ctk.set_appearance_mode("dark")
+            self.btn_theme.configure(text="☀️  Chế độ Sáng")
+        else:
+            ctk.set_appearance_mode("light")
+            self.btn_theme.configure(text="🌙  Chế độ Tối")
 
     # ─── Card helper ───
     def _card(self, parent, title="", pady=(0,12)):

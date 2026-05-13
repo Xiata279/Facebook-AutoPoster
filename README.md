@@ -1,4 +1,4 @@
-<h1 align="center">Facebook Auto Poster V1.0.0</h1>
+<h1 align="center">Facebook Auto Poster V1.0.1</h1>
 
 <div align="center">
 
