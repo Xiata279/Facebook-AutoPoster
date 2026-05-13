@@ -36,6 +36,10 @@ $config = [
     'grok_api_key'       => $env['GROK_API_KEY'] ?? '',
     'grok_model'         => $env['GROK_MODEL'] ?? 'grok-3-mini-fast',
 
+    // ─── ChatGPT / OpenAI — fallback nội dung qua Responses API ───
+    'openai_api_key'     => $env['OPENAI_API_KEY'] ?? '',
+    'openai_model'       => $env['OPENAI_MODEL'] ?? 'chat-latest',
+
     // ─── Gemini AI — fallback text + tạo ảnh Imagen ───
     'gemini_api_key'     => $env['GEMINI_API_KEY'] ?? '',
     'gemini_model'       => $env['GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite',
@@ -115,7 +119,27 @@ switch ($mode) {
         echo "═══ BÀI ĐĂNG FACEBOOK ═══\n\n";
         echo $preview['post_content'];
         echo "\n\n═══════════════════════════\n";
-        echo "\n💡 Để đăng bài lên Facebook, chạy: php run_football_post.php\n";
+
+        // ✅ Lưu file để chrome_poster.py đọc ở bước tiếp theo
+        if (!empty($preview['post_content']) && $preview['status'] === 'success') {
+            $output_dir = $config['output_dir'];
+            if (!is_dir($output_dir)) { mkdir($output_dir, 0755, true); }
+
+            $ts = date('Ymd_His');
+            $txt_file = $output_dir . "summary_post_{$ts}.txt";
+            file_put_contents($txt_file, $preview['post_content']);
+
+            $json_file = $output_dir . 'latest_post.json';
+            file_put_contents($json_file, json_encode([
+                'post_content' => $preview['post_content'],
+                'timestamp'    => date('Y-m-d H:i:s'),
+                'source_file'  => basename($txt_file),
+                'ai_provider'  => $preview['ai_provider'] ?? 'unknown',
+            ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+
+            echo "\n✅ Đã lưu bài vào: output/latest_post.json\n";
+        }
+        echo "\n💡 Bước tiếp theo: python chrome_poster.py\n";
         break;
 
     // ─── Chạy đầy đủ (thu thập + tạo bài + tạo ảnh + đăng) ───

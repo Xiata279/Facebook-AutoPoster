@@ -5,12 +5,12 @@
  * 
  * Quy trình tự động hoàn chỉnh:
  * 1. Thu thập tin tức bóng đá từ các nguồn Việt Nam
- * 2. Tóm tắt nội dung bằng Grok AI (xAI) hoặc Gemini AI
+ * 2. Tóm tắt nội dung bằng Grok, ChatGPT/OpenAI hoặc Gemini AI
  * 3. Tạo bài đăng Facebook hấp dẫn với câu hỏi tương tác
  * 4. Tạo ảnh minh họa bằng Imagen AI (Gemini)
  * 5. Đăng lên Fanpage Facebook
  * 
- * AI Text  : Grok (xai-...) → fallback Gemini nếu lỗi
+ * AI Text  : Grok (xai-...) → ChatGPT/OpenAI → fallback Gemini nếu lỗi
  * AI Image : Gemini Imagen
  * 
  * @author Xiata
@@ -26,6 +26,7 @@ class FootballAutoWorkflow {
     private $poster;
     private $gemini_api_key;
     private $grok_api_key;
+    private $openai_api_key;
     private $config;
     private $log_file;
 
@@ -44,6 +45,10 @@ class FootballAutoWorkflow {
             // Grok AI (xAI) - dùng để viết bài (ưu tiên)
             'grok_api_key' => '',
             'grok_model'   => 'grok-3-mini-fast',  // hoặc grok-3, grok-3-mini
+
+            // ChatGPT / OpenAI - dùng Responses API
+            'openai_api_key' => '',
+            'openai_model'   => 'chat-latest',
 
             // Gemini AI - dùng để tạo ảnh (Imagen) + fallback text
             'gemini_api_key' => '',
@@ -68,6 +73,7 @@ class FootballAutoWorkflow {
 
         $this->gemini_api_key = $this->config['gemini_api_key'];
         $this->grok_api_key   = $this->config['grok_api_key'];
+        $this->openai_api_key = $this->config['openai_api_key'];
         $this->log_file = $this->config['log_file'];
 
         // Tạo thư mục
@@ -362,7 +368,16 @@ Yêu cầu:
             if ($result['success']) {
                 return $result;
             }
-            $this->log("⚠️ Grok thất bại ({$result['message']}), thử Gemini...");
+            $this->log("⚠️ Grok thất bại ({$result['message']}), thử ChatGPT...");
+        }
+
+        // Fallback ChatGPT / OpenAI
+        if (!empty($this->openai_api_key)) {
+            $result = $this->callOpenAI($prompt);
+            if ($result['success']) {
+                return $result;
+            }
+            $this->log("⚠️ ChatGPT thất bại ({$result['message']}), thử Gemini...");
         }
 
         // Fallback Gemini
@@ -376,6 +391,78 @@ Yêu cầu:
         }
 
         return ['success' => false, 'text' => '', 'provider' => 'none', 'message' => 'Không có AI key nào được cấu hình'];
+    }
+
+    /**
+     * Gọi ChatGPT / OpenAI Responses API để tạo text.
+     */
+    private function callOpenAI($prompt) {
+        try {
+            $url = 'https://api.openai.com/v1/responses';
+            $model = $this->config['openai_model'] ?? 'chat-latest';
+
+            $data = [
+                'model' => $model,
+                'instructions' => 'Bạn là chuyên gia content bóng đá Việt Nam. Viết bài đăng Facebook hấp dẫn, tự nhiên, giàu cảm xúc bằng tiếng Việt.',
+                'input' => $prompt,
+            ];
+
+            $ch = curl_init();
+            $json_data = json_encode($data, JSON_UNESCAPED_UNICODE);
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $json_data,
+                CURLOPT_TIMEOUT => 60,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $this->openai_api_key,
+                    'Content-Length: ' . strlen($json_data)
+                ]
+            ]);
+
+            $result = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($error) {
+                return ['success' => false, 'text' => '', 'provider' => 'openai', 'message' => "cURL: $error"];
+            }
+
+            $decoded = json_decode($result, true);
+            $text = $this->extractOpenAIText($decoded);
+
+            if ($http_code >= 200 && $http_code < 300 && !empty($text)) {
+                $this->log("✅ ChatGPT/OpenAI ({$model}) tạo bài thành công");
+                return ['success' => true, 'text' => $text, 'provider' => 'openai'];
+            }
+
+            $err_msg = $decoded['error']['message'] ?? "HTTP $http_code";
+            return ['success' => false, 'text' => '', 'provider' => 'openai', 'message' => $err_msg];
+
+        } catch (Exception $e) {
+            return ['success' => false, 'text' => '', 'provider' => 'openai', 'message' => $e->getMessage()];
+        }
+    }
+
+    private function extractOpenAIText($decoded) {
+        if (!is_array($decoded)) {
+            return '';
+        }
+        if (!empty($decoded['output_text']) && is_string($decoded['output_text'])) {
+            return trim($decoded['output_text']);
+        }
+        foreach (($decoded['output'] ?? []) as $item) {
+            foreach (($item['content'] ?? []) as $content) {
+                if (!empty($content['text']) && in_array($content['type'] ?? '', ['output_text', 'text'], true)) {
+                    return trim($content['text']);
+                }
+            }
+        }
+        return '';
     }
 
     /**
@@ -448,9 +535,6 @@ Yêu cầu:
      */
     private function callGemini($prompt) {
         try {
-            $model = $this->config['gemini_model'] ?? 'gemini-2.5-flash-lite';
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . $this->gemini_api_key;
-
             $data = [
                 'contents' => [
                     [
@@ -467,25 +551,54 @@ Yêu cầu:
                 ]
             ];
 
-            $response = $this->makeRequest($url, $data);
+            $last_message = '';
+            foreach ($this->geminiTextModels() as $model) {
+                $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . $this->gemini_api_key;
+                $response = $this->makeRequest($url, $data);
 
-            if (!$response['success']) {
-                return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => $response['message']];
+                if (!$response['success']) {
+                    $last_message = $response['message'];
+                    $this->log("⚠️ Gemini model {$model} thất bại: {$last_message}");
+                    continue;
+                }
+
+                $result = $response['data'];
+
+                if (isset($result['candidates'][0]['content']['parts'][0]['text'])) {
+                    $text = trim($result['candidates'][0]['content']['parts'][0]['text']);
+                    $this->log("✅ Gemini ({$model}) tạo bài thành công");
+                    return ['success' => true, 'text' => $text, 'provider' => 'gemini'];
+                }
+
+                $last_message = 'Gemini không trả về kết quả';
+                $this->log("⚠️ Gemini model {$model} không trả về nội dung");
             }
 
-            $result = $response['data'];
-
-            if (isset($result['candidates'][0]['content']['parts'][0]['text'])) {
-                $text = trim($result['candidates'][0]['content']['parts'][0]['text']);
-                $this->log("✅ Gemini ({$model}) tạo bài thành công");
-                return ['success' => true, 'text' => $text, 'provider' => 'gemini'];
-            }
-
-            return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => 'Gemini không trả về kết quả'];
+            return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => $last_message ?: 'Không có Gemini model khả dụng'];
 
         } catch (Exception $e) {
             return ['success' => false, 'text' => '', 'provider' => 'gemini', 'message' => $e->getMessage()];
         }
+    }
+
+    private function geminiTextModels() {
+        $configured = $this->config['gemini_model'] ?? '';
+        $models = [
+            $configured,
+            'gemini-2.5-flash-lite',
+            'gemini-2.5-flash',
+            'gemini-2.0-flash',
+            'gemini-flash-latest',
+        ];
+
+        $clean = [];
+        foreach ($models as $model) {
+            $model = trim(str_replace('models/', '', (string) $model));
+            if ($model !== '' && !in_array($model, $clean, true)) {
+                $clean[] = $model;
+            }
+        }
+        return $clean;
     }
 
     /**
