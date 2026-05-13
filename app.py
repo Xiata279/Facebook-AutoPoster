@@ -146,13 +146,15 @@ class App(ctk.CTk):
         self.sidebar.grid_propagate(False)
 
         # Logo ảnh Xiata
-        logo_path = BASE / "assets" / "logo.jpg"
+        logo_path = BASE / "assets" / "logo.png"
+        if not logo_path.exists():
+            logo_path = BASE / "assets" / "logo.jpg"  # fallback
         self._logo_img = None
         if logo_path.exists() and HAS_PIL:
             try:
-                img = Image.open(logo_path)
-                img = img.resize((80, 80), Image.LANCZOS)
-                self._logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(80, 80))
+                img = Image.open(logo_path).convert("RGBA")
+                img = img.resize((90, 90), Image.LANCZOS)
+                self._logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(90, 90))
             except: pass
 
         if self._logo_img:
