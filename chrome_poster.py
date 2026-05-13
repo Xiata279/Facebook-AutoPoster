@@ -403,33 +403,137 @@ class FacebookPoster:
         time.sleep(30)
         return True
 
+    # ── 5. Chuyển sang chế độ Fanpage ──
+    def switch_to_page_mode(self) -> bool:
+        """Click 'Chuyển ngay' để đăng bài với tư cách Fanpage, không phải cá nhân."""
+        xpaths = [
+            "//a[contains(.,'Chuyển ngay')]",
+            "//span[text()='Chuyển ngay']/ancestor::a[1]",
+            "//div[@role='button'][contains(.,'Chuyển ngay')]",
+            "//a[contains(.,'Switch now')]",
+            "//div[@role='button'][contains(.,'Switch now')]",
+        ]
+        for xp in xpaths:
+            try:
+                btn = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.XPATH, xp)))
+                btn.click()
+                time.sleep(random.uniform(2.0, 3.0))
+                log("✅ Đã chuyển sang chế độ quản lý Trang (Fanpage)", "ok")
+                return True
+            except:
+                continue
+        log("ℹ Đã ở chế độ trang hoặc không cần chuyển", "info")
+        return True
+
+    # ── 6. Upload ảnh vào composer ──
+    def upload_image(self, image_path: str) -> bool:
+        """Đính kèm ảnh vào bài viết qua file input hoặc nút ảnh."""
+        if not image_path or not os.path.exists(image_path):
+            return False
+
+        log(f">> Dinh kem anh: {os.path.basename(image_path)}", "info")
+
+        # Cách 1: Tìm input[type=file] sẵn trong DOM
+        try:
+            inputs = self.driver.find_elements(By.XPATH, "//input[@type='file']")
+            for fi in inputs:
+                try:
+                    fi.send_keys(image_path)
+                    time.sleep(2)
+                    log("✅ Upload ảnh thành công (direct file input)", "ok")
+                    return True
+                except:
+                    continue
+        except:
+            pass
+
+        # Cách 2: Click nút ảnh/video trước, rồi tìm input
+        photo_xpaths = [
+            "//div[@aria-label='Anh/video']",
+            "//div[@aria-label='Photo/video']",
+            "//div[@aria-label='Photo or video']",
+            "//div[@aria-label='Them anh hoac video']",
+            "//div[@aria-label='Add photos or videos']",
+            "//div[contains(@aria-label,'photo')]",
+            "//div[contains(@aria-label,'anh')]",
+        ]
+        for xp in photo_xpaths:
+            try:
+                btn = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.XPATH, xp)))
+                self.driver.execute_script("arguments[0].click();", btn)
+                time.sleep(1.5)
+                # Tìm lại input sau khi click
+                inputs = self.driver.find_elements(
+                    By.XPATH, "//input[@type='file']")
+                for fi in inputs:
+                    try:
+                        fi.send_keys(image_path)
+                        time.sleep(2)
+                        log("✅ Upload ảnh thành công (click photo btn)", "ok")
+                        return True
+                    except:
+                        continue
+            except:
+                continue
+
+        log("⚠ Không thể upload ảnh tự động — đăng text only", "warn")
+        return False
+
     # ── POST một trang ──
-    def post_to_page(self, slug: str, content: str, dry_run: bool = False) -> bool:
-        log(f"\n{'═'*50}", "info")
-        log(f"📌 ĐANG XỬ LÝ TRANG: {slug}", "info")
-        log(f"{'═'*50}", "info")
+    def post_to_page(self, slug: str, content: str,
+                     dry_run: bool = False, image_path: str = None) -> bool:
+        log("=" * 50, "info")
+        log(f">> DANG XU LY TRANG: {slug}", "info")
+        log("=" * 50, "info")
 
         if not self.goto_page(slug):
             return False
+
+        # QUAN TRỌNG: Chuyển sang chế độ Fanpage trước khi đăng
+        self.switch_to_page_mode()
+
         if not self.open_composer():
             return False
+
+        # Upload ảnh TRƯỚC khi nhập nội dung
+        if image_path:
+            self.upload_image(image_path)
+            time.sleep(random.uniform(1.0, 1.5))
+
         if not self.type_content(content):
             return False
         return self.submit(dry_run)
 
 
-# ════════════════════════════════════════════════════
-#  MAIN
-# ════════════════════════════════════════════════════
+# ── Tìm ảnh mới nhất trong output/ hoặc images/ ──
+def get_image_to_post() -> str:
+    """Tìm file ảnh mới nhất để đính kèm (trong vòng 2 giờ gần nhất)."""
+    dirs = [OUTPUT_DIR, BASE / "images"]
+    all_imgs = []
+    for d in dirs:
+        if d.exists():
+            for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+                all_imgs.extend(d.glob(ext))
+    if not all_imgs:
+        return None
+    latest = max(all_imgs, key=lambda f: f.stat().st_mtime)
+    age_hours = (time.time() - latest.stat().st_mtime) / 3600
+    if age_hours > 2:
+        return None
+    return str(latest)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Facebook Chrome Auto Poster v2")
     parser.add_argument("--pages",   nargs="+", help="Slug/URL các trang (ghi đè .env)")
     parser.add_argument("--content", default="",  help="Nội dung bài đăng")
     parser.add_argument("--dry-run", action="store_true", help="Thử nghiệm không bấm Đăng")
+    parser.add_argument("--image",   default="",  help="Đường dẫn ảnh đính kèm (tyù chọn)")
     args = parser.parse_args()
 
-    log(BOLD("════════════ FACEBOOK CHROME AUTO POSTER v2 ════════════"), "info")
+    log(BOLD("=" * 50 + " FACEBOOK CHROME AUTO POSTER v2 " + "=" * 50), "info")
 
     env   = read_env()
     pages = get_pages(env, args.pages)
@@ -446,8 +550,15 @@ def main():
         log("   → Chạy PHP trước: php run_football_post.php", "warn")
         sys.exit(1)
 
-    log(f"📄 Nội dung ({len(content)} ký tự): {content[:100]}...", "info")
-    log(f"🎯 Trang đăng: {', '.join(pages)}", "info")
+    # Tìm ảnh tự động
+    image_path = args.image.strip() or get_image_to_post()
+    if image_path:
+        log(f">> Anh dinh kem: {image_path}", "info")
+    else:
+        log("ℹ️ Không có ảnh đính kèm (chỉ đăng text)", "info")
+
+    log(f">> Noi dung ({len(content)} ky tu): {content[:100]}...", "info")
+    log(f">> Trang dang: {', '.join(pages)}", "info")
 
     # Kết nối Chrome
     driver = connect_chrome()
@@ -457,10 +568,10 @@ def main():
     results = {}
     for i, slug in enumerate(pages):
         if i > 0:
-            log(f"\n⏳ Chờ 15 giây trước trang tiếp theo...", "info")
+            log(f"\n>> Cho 15 giay truoc trang tiep theo...", "info")
             time.sleep(15)
 
-        ok = poster.post_to_page(slug, content, args.dry_run)
+        ok = poster.post_to_page(slug, content, args.dry_run, image_path)
         results[slug] = ok
 
     # Tổng kết
