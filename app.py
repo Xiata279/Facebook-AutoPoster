@@ -28,8 +28,28 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 BASE = Path(__file__).parent
-PHP  = r"C:\xampp\php\php.exe"
 PY   = sys.executable
+
+# Tìm PHP tự động
+def find_php() -> str:
+    candidates = [
+        r"C:\xampp\php\php.exe",
+        r"C:\wamp64\bin\php\php8.2.0\php.exe",
+        r"C:\wamp\bin\php\php8.0.0\php.exe",
+        r"C:\php\php.exe",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    # Thử lệnh php trong PATH
+    try:
+        r = subprocess.run(["php", "-v"], capture_output=True, timeout=3)
+        if r.returncode == 0:
+            return "php"
+    except: pass
+    return r"C:\xampp\php\php.exe"  # fallback
+
+PHP = find_php()
 
 # Đọc .env
 def read_env():
@@ -132,6 +152,7 @@ class App(ctk.CTk):
             ("dashboard",  "🏠  Dashboard"),
             ("post",       "✨  Tạo & Đăng bài"),
             ("schedule",   "⏰  Lịch hẹn"),
+            ("chat",       "💬  Chat AI"),
             ("settings",   "⚙️   Cài đặt"),
             ("logs",       "📋  Nhật ký"),
         ]
@@ -160,7 +181,7 @@ class App(ctk.CTk):
 
         # Pages container
         self.pages = {}
-        for key in ["dashboard", "post", "schedule", "settings", "logs"]:
+        for key in ["dashboard", "post", "schedule", "chat", "settings", "logs"]:
             frame = ctk.CTkScrollableFrame(self.content, fg_color="#0d1117",
                                             scrollbar_button_color="#30363d")
             frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
@@ -170,9 +191,11 @@ class App(ctk.CTk):
         self._build_dashboard()
         self._build_post()
         self._build_schedule()
+        self._build_chat()
         self._build_settings()
         self._build_logs()
         self._sched_running = False
+        self._chat_history = []  # lưu lịch sử chat
         self._start_scheduler_thread()
 
     def _show_page(self, key):
@@ -527,7 +550,7 @@ class App(ctk.CTk):
         self.post_output.configure(state="disabled")
 
         def _full_run():
-            py_path = r"C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe"
+            py_path = PY
             steps = [
                 ("📰 Bước 1: Thu thập tin + AI tạo bài",
                  [PHP, str(BASE/"run_football_post.php"), "preview-post"]),
@@ -575,11 +598,10 @@ class App(ctk.CTk):
         self.post_output.delete("1.0", "end")
         self.post_output.insert("end", f"▶ {datetime.now().strftime('%H:%M:%S')} — {action}\n\n")
         self.post_output.configure(state="disabled")
-        py_path = r"C:\Users\Xiata\AppData\Local\Programs\Python\Python312\python.exe"
         cmd_map = {
             "preview":  [PHP, str(BASE/"run_football_post.php"), "preview-post"],
-            "generate": [PHP, str(BASE/"run_football_post.php")],
-            "chrome":   [py_path, str(BASE/"chrome_poster.py")],
+            "generate": [PHP, str(BASE/"run_football_post.php"), "preview-post"],
+            "chrome":   [PY, str(BASE/"chrome_poster.py")],
         }
         def on_done(out, ok):
             def _u():
@@ -663,6 +685,159 @@ class App(ctk.CTk):
                 schedule.run_pending()
                 time.sleep(30)
         threading.Thread(target=_loop, daemon=True).start()
+
+    # ════════════ CHAT AI ════════════
+    def _build_chat(self):
+        p = self.pages["chat"]
+        ctk.CTkLabel(p, text="💬  Chat AI", font=ctk.CTkFont(size=20, weight="bold"),
+                     text_color="#e6edf3").pack(anchor="w", padx=20, pady=(20,4))
+        ctk.CTkLabel(p, text="Trò chuyện với Grok hoặc Gemini AI (dùng key trong Cài đặt)",
+                     font=ctk.CTkFont(size=12), text_color="#8b949e").pack(anchor="w", padx=20, pady=(0,12))
+
+        # Model selector
+        sel_row = ctk.CTkFrame(p, fg_color="transparent")
+        sel_row.pack(fill="x", padx=20, pady=(0,10))
+        ctk.CTkLabel(sel_row, text="🤖 AI:", font=ctk.CTkFont(size=12),
+                     text_color="#8b949e").pack(side="left", padx=(0,8))
+        self.chat_ai_var = ctk.StringVar(value="auto")
+        for val, label in [("auto","🔁 Tự động"), ("grok","🟣 Grok"), ("gemini","🔵 Gemini")]:
+            ctk.CTkRadioButton(sel_row, text=label, variable=self.chat_ai_var, value=val,
+                               font=ctk.CTkFont(size=12), text_color="#c9d1d9").pack(side="left", padx=8)
+
+        # Chat history display
+        chat_card = ctk.CTkFrame(p, corner_radius=10, fg_color="#161b22",
+                                  border_width=1, border_color="#30363d")
+        chat_card.pack(fill="x", padx=20, pady=(0,10))
+        self.chat_box = ctk.CTkTextbox(chat_card, height=400,
+                                        font=ctk.CTkFont(size=12),
+                                        fg_color="#0d1117", text_color="#e6edf3",
+                                        border_width=0, wrap="word")
+        self.chat_box.pack(fill="both", padx=12, pady=12, expand=True)
+        self.chat_box.insert("end", "🤖 Xin chào! Tôi là trợ lý AI. Hãy đặt câu hỏi cho tôi!\n\n")
+        self.chat_box.configure(state="disabled")
+
+        # Input row
+        inp_row = ctk.CTkFrame(p, fg_color="transparent")
+        inp_row.pack(fill="x", padx=20, pady=(0,16))
+        inp_row.columnconfigure(0, weight=1)
+
+        self.chat_input = ctk.CTkEntry(
+            inp_row, placeholder_text="Nhập câu hỏi... (Enter để gửi)",
+            font=ctk.CTkFont(size=13), height=42,
+            fg_color="#161b22", border_color="#30363d")
+        self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0,8))
+        self.chat_input.bind("<Return>", lambda e: self._send_chat())
+
+        self.btn_send_chat = ctk.CTkButton(
+            inp_row, text="📨 Gửi", width=90, height=42,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#1f6feb", hover_color="#388bfd",
+            command=self._send_chat)
+        self.btn_send_chat.grid(row=0, column=1)
+
+        ctk.CTkButton(p, text="🗑 Xoá lịch sử", height=32,
+                      font=ctk.CTkFont(size=11),
+                      fg_color="transparent", border_width=1, border_color="#30363d",
+                      hover_color="#21262d", text_color="#8b949e",
+                      command=self._clear_chat).pack(anchor="e", padx=20, pady=(0,16))
+
+    def _append_chat(self, role: str, text: str):
+        colors = {"👤 Bạn": "#58a6ff", "🤖 AI": "#3fb950", "⚠️ Lỗi": "#da3633"}
+        self.chat_box.configure(state="normal")
+        self.chat_box.insert("end", f"{role}:\n", role)
+        self.chat_box.insert("end", f"{text}\n\n")
+        self.chat_box.tag_config(role, foreground=colors.get(role, "#e6edf3"))
+        self.chat_box.see("end")
+        self.chat_box.configure(state="disabled")
+
+    def _clear_chat(self):
+        self._chat_history = []
+        self.chat_box.configure(state="normal")
+        self.chat_box.delete("1.0", "end")
+        self.chat_box.insert("end", "🤖 Lịch sử đã được xoá. Hãy bắt đầu cuộc trò chuyện mới!\n\n")
+        self.chat_box.configure(state="disabled")
+
+    def _send_chat(self):
+        msg = self.chat_input.get().strip()
+        if not msg:
+            return
+        self.chat_input.delete(0, "end")
+        self._append_chat("👤 Bạn", msg)
+        self.btn_send_chat.configure(state="disabled", text="⏳...")
+        self._chat_history.append({"role": "user", "content": msg})
+
+        def _do():
+            env = read_env()
+            ai_choice = self.chat_ai_var.get()
+            grok_key   = env.get("GROK_API_KEY", "")
+            gemini_key = env.get("GEMINI_API_KEY", "")
+            grok_model   = env.get("GROK_MODEL", "grok-3-mini-fast")
+            gemini_model = env.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+            reply = None; provider = ""
+            if ai_choice in ("auto", "grok") and grok_key and "THAY" not in grok_key:
+                reply, provider = self._chat_grok(self._chat_history, grok_key, grok_model)
+            if reply is None and ai_choice in ("auto", "gemini") and gemini_key and "THAY" not in gemini_key:
+                reply, provider = self._chat_gemini(self._chat_history, gemini_key, gemini_model)
+            if reply is None:
+                reply = "❌ Chưa cấu hình API Key!\nVào ⚙️ Cài đặt → điền GROK_API_KEY hoặc GEMINI_API_KEY → Lưu cài đặt."
+                provider = "error"
+
+            if provider != "error":
+                self._chat_history.append({"role": "assistant", "content": reply})
+
+            def _upd():
+                role = "🤖 AI" if provider != "error" else "⚠️ Lỗi"
+                self._append_chat(role, reply)
+                self.btn_send_chat.configure(state="normal", text="📨 Gửi")
+            self.after(0, _upd)
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _chat_grok(self, history, key, model):
+        try:
+            import urllib.request, json as _json
+            messages = [
+                {"role": "system", "content": "Bạn là trợ lý AI thông minh, trả lời bằng tiếng Việt ngắn gọn và hữu ích."}
+            ] + history
+            data = _json.dumps({
+                "model": model,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 1024
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.x.ai/v1/chat/completions",
+                data=data,
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {key}"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as r:
+                res = _json.loads(r.read())
+            return res["choices"][0]["message"]["content"].strip(), "grok"
+        except Exception as e:
+            return None, str(e)
+
+    def _chat_gemini(self, history, key, model):
+        try:
+            import urllib.request, json as _json
+            contents = []
+            for m in history:
+                role = "user" if m["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": m["content"]}]})
+            data = _json.dumps({
+                "contents": contents,
+                "systemInstruction": {"parts": [{"text": "Bạn là trợ lý AI thông minh, trả lời bằng tiếng Việt ngắn gọn và hữu ích."}]},
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}
+            }).encode()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+            req = urllib.request.Request(url, data=data,
+                                          headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                res = _json.loads(r.read())
+            return res["candidates"][0]["content"]["parts"][0]["text"].strip(), "gemini"
+        except Exception as e:
+            return None, str(e)
 
     # ════════════ SETTINGS ════════════
     def _build_settings(self):
