@@ -16,7 +16,7 @@ Cách dùng:
 @author Xiata
 """
 
-import os, sys, json, time, argparse, socket
+import os, sys, json, time, argparse, socket, random
 from pathlib import Path
 from datetime import datetime
 
@@ -208,30 +208,47 @@ class FacebookPoster:
     # ── 2. Mở ô đăng bài ──
     def open_composer(self) -> bool:
         log("🔍 Tìm ô soạn bài...")
+        time.sleep(2)
 
-        # Các selector nút "Tạo bài viết" / "Create a post"
+        # Mở rộng selectors cho FB 2024-2025 (cả tiếng Việt & tiếng Anh)
         xpaths = [
-            "//div[@role='button'][.//span[contains(text(),'Tạo bài viết')]]",
-            "//div[@role='button'][.//span[contains(text(),'Create a post')]]",
-            "//div[@role='button'][.//span[contains(text(),\"What's on your mind\")]]",
-            "//div[@role='button'][.//span[contains(text(),'Bạn đang nghĩ gì')]]",
-            "//div[contains(@aria-label,'Tạo bài viết')]",
-            "//div[contains(@aria-label,'Create a post')]",
-            # Fallback: tìm bất kỳ div button có từ "bài"
+            # aria-label bền vững nhất
+            "//div[@aria-label='Tạo bài viết']",
+            "//div[@aria-label='Create a post']",
+            "//div[@aria-label='Create post']",
+            # span text chính xác
+            "//div[@role='button'][.//span[text()='Tạo bài viết']]",
+            "//div[@role='button'][.//span[text()='Create a post']]",
+            "//div[@role='button'][.//span[text()=""What's on your mind?""]]",
+            "//div[@role='button'][.//span[text()='Bạn đang nghĩ gì?']]",
+            # contains linh hoạt hơn
+            "//div[@role='button'][.//span[contains(text(),'Tạo bài')]]",
+            "//div[@role='button'][.//span[contains(text(),'Create')]]",
+            "//div[@role='button'][.//span[contains(text(),\"What's\")]]",
+            "//div[@role='button'][.//span[contains(text(),'nghĩ gì')]]",
+            # contenteditable trực tiếp (FB đôi khi show textbox sẵn)
+            "//div[@role='textbox' and @contenteditable='true']",
+            # fallback rộng
             "//div[@role='button' and contains(.,'bài viết')]",
             "//div[@role='button' and contains(.,'post')]",
         ]
 
         for xp in xpaths:
             try:
-                el = self.wait_s.until(EC.element_to_be_clickable((By.XPATH, xp)))
-                self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-                time.sleep(0.5)
-                el.click()
-                time.sleep(2)
+                el = WebDriverWait(self.driver, 4).until(
+                    EC.element_to_be_clickable((By.XPATH, xp)))
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", el)
+                time.sleep(random.uniform(0.3, 0.7))
+                try:
+                    el.click()
+                except:
+                    self.driver.execute_script("arguments[0].click();", el)
+                time.sleep(random.uniform(1.5, 2.5))
                 log("✅ Đã mở ô soạn bài", "ok")
                 return True
-            except: continue
+            except:
+                continue
 
         log("⚠️ Không tìm thấy nút soạn bài tự động", "warn")
         return False
@@ -306,27 +323,80 @@ class FacebookPoster:
             return True
 
         log("📤 Tìm nút Đăng...")
-        time.sleep(1)
+        time.sleep(random.uniform(1.0, 1.5))
 
+        # Danh sách XPath mở rộng cho FB 2024-2025
         submit_xpaths = [
+            # aria-label chính xác (tiếng Việt + tiếng Anh)
             "//div[@aria-label='Đăng'][@role='button']",
             "//div[@aria-label='Post'][@role='button']",
+            "//div[@aria-label='Share now'][@role='button']",
+            # button tag
+            "//button[@aria-label='Đăng']",
+            "//button[@aria-label='Post']",
+            "//button[text()='Đăng']",
+            "//button[text()='Post']",
+            # span text chính xác bên trong div/button
             "//div[@role='button'][.//span[text()='Đăng']]",
             "//div[@role='button'][.//span[text()='Post']]",
-            "//span[text()='Đăng']/ancestor::div[@role='button']",
-            "//span[text()='Post']/ancestor::div[@role='button']",
+            "//div[@role='button'][./span[text()='Đăng']]",
+            # ancestor
+            "//span[text()='Đăng']/ancestor::div[@role='button'][1]",
+            "//span[text()='Post']/ancestor::div[@role='button'][1]",
+            "//span[text()='Đăng']/ancestor::button[1]",
+            # contains linh hoạt
+            "//div[@role='button'][contains(@aria-label,'Đăng')]",
+            "//div[@role='button'][contains(.//span/text(),'Đăng')]",
         ]
 
         for xp in submit_xpaths:
             try:
-                btn = self.wait_s.until(EC.element_to_be_clickable((By.XPATH, xp)))
-                self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-                time.sleep(0.3)
-                btn.click()
+                btn = WebDriverWait(self.driver, 4).until(
+                    EC.element_to_be_clickable((By.XPATH, xp)))
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", btn)
+                time.sleep(random.uniform(0.3, 0.6))
+                try:
+                    btn.click()
+                except:
+                    # JS click fallback nếu click thường bị chặn
+                    self.driver.execute_script("arguments[0].click();", btn)
                 log("✅ Đã bấm Đăng!", "ok")
                 time.sleep(4)
+                # Xác nhận bài đã đăng: kiểm tra dialog đã biến mất
+                try:
+                    WebDriverWait(self.driver, 6).until(
+                        EC.invisibility_of_element_located(
+                            (By.XPATH, "//div[@role='dialog']")))
+                    log("✅ Xác nhận: Dialog đã đóng — bài đã đăng thành công!", "ok")
+                except:
+                    log("⚠️ Dialog có thể vẫn mở — kiểm tra thủ công trên trình duyệt", "warn")
                 return True
-            except: continue
+            except:
+                continue
+
+        # JS bruteforce: tìm tất cả button khả năng là nút Đăng
+        log("🔄 Thử JS bruteforce tìm nút Đăng...", "warn")
+        try:
+            found = self.driver.execute_script("""
+                var texts = ['Đăng', 'Post', 'Share now'];
+                var allBtns = document.querySelectorAll(
+                    'div[role=\"button\"], button');
+                for (var b of allBtns) {
+                    var t = (b.innerText || b.textContent || '').trim();
+                    if (texts.includes(t) && b.offsetParent !== null) {
+                        b.click();
+                        return true;
+                    }
+                }
+                return false;
+            """)
+            if found:
+                log("✅ JS bruteforce click thành công!", "ok")
+                time.sleep(4)
+                return True
+        except Exception as e:
+            log(f"⚠️ JS bruteforce lỗi: {e}", "warn")
 
         # Thông báo thủ công
         log("⚠️  Không tìm thấy nút Đăng. Vui lòng bấm thủ công trong 30 giây...", "warn")
