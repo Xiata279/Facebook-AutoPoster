@@ -32,6 +32,13 @@ $config = [
     'page_access_token'  => $env['FB_ACCESS_TOKEN'] ?? '',
     'facebook_api_version' => 'v20.0',
 
+    // ─── Free AI ───
+    'free_ai_only'       => !isset($env['FREE_AI_ONLY']) || strtolower(trim((string)$env['FREE_AI_ONLY'])) !== 'false',
+    'ollama_base_url'    => $env['OLLAMA_BASE_URL'] ?? 'http://localhost:11434',
+    'ollama_model'       => $env['OLLAMA_MODEL'] ?? 'gemma3',
+    'hf_token'           => $env['HF_TOKEN'] ?? '',
+    'hf_model'           => $env['HF_MODEL'] ?? 'deepseek-ai/DeepSeek-R1:fastest',
+
     // ─── Grok AI (xAI) — AI chính để viết bài ───
     'grok_api_key'       => $env['GROK_API_KEY'] ?? '',
     'grok_model'         => $env['GROK_MODEL'] ?? 'grok-3-mini-fast',
@@ -48,12 +55,17 @@ $config = [
     'max_articles'       => 5,
     'date_filter'        => 'both',
     'fetch_full_content' => false,
+    'article_links_file' => __DIR__ . '/input/article_links.txt',
+    'avoid_recent_duplicates' => !isset($env['AVOID_RECENT_DUPLICATES']) || strtolower(trim((string)$env['AVOID_RECENT_DUPLICATES'])) !== 'false',
+    'article_history_file' => __DIR__ . '/cache/article_history.json',
+    'article_history_days' => (int)($env['ARTICLE_HISTORY_DAYS'] ?? 14),
+    'max_total_articles' => (int)($env['MAX_TOTAL_ARTICLES'] ?? 8),
 
     // ─── Cấu hình Bài đăng ───
     'post_style'         => 'tong_hop',
     'max_posts'          => 1,
     // Bật tạo ảnh nếu có Gemini key
-    'generate_image'     => !empty($env['GEMINI_API_KEY']) && strpos($env['GEMINI_API_KEY'], 'THAY') === false,
+    'generate_image'     => false,
 
     // ─── Thư mục ───
     'image_folder'       => __DIR__ . '/images/',
@@ -63,7 +75,7 @@ $config = [
 ];
 
 // Tự động tạo thư mục cần thiết
-foreach (['images', 'logs', 'cache', 'output'] as $dir) {
+foreach (['images', 'logs', 'cache', 'output', 'input'] as $dir) {
     $path = __DIR__ . '/' . $dir;
     if (!is_dir($path)) { mkdir($path, 0755, true); }
 }
@@ -135,9 +147,14 @@ switch ($mode) {
                 'timestamp'    => date('Y-m-d H:i:s'),
                 'source_file'  => basename($txt_file),
                 'ai_provider'  => $preview['ai_provider'] ?? 'unknown',
+                'image_path'    => $preview['image_path'] ?? null,
+                'image_paths'   => $preview['image_paths'] ?? [],
             ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
 
             echo "\n✅ Đã lưu bài vào: output/latest_post.json\n";
+            if (!empty($preview['image_path'])) {
+                echo "🖼️ Ảnh đính kèm: {$preview['image_path']}\n";
+            }
         }
         echo "\n💡 Bước tiếp theo: python chrome_poster.py\n";
         break;

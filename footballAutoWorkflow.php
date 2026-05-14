@@ -10,7 +10,7 @@
  * 4. Tạo ảnh minh họa bằng Imagen AI (Gemini)
  * 5. Đăng lên Fanpage Facebook
  * 
- * AI Text  : Grok (xai-...) → ChatGPT/OpenAI → fallback Gemini nếu lỗi
+ * AI Text  : ChatGPT/OpenAI → Grok (xai-...) → fallback Gemini nếu lỗi
  * AI Image : Gemini Imagen
  * 
  * @author Xiata
@@ -24,6 +24,8 @@ class FootballAutoWorkflow {
 
     private $scraper;
     private $poster;
+    private $ollama_base_url;
+    private $hf_token;
     private $gemini_api_key;
     private $grok_api_key;
     private $openai_api_key;
@@ -42,15 +44,22 @@ class FootballAutoWorkflow {
             'page_access_token' => '',
             'facebook_api_version' => 'v20.0',
 
-            // Grok AI (xAI) - dùng để viết bài (ưu tiên)
+            // Free AI - ưu tiên trước để tránh phát sinh chi phí
+            'free_ai_only' => true,
+            'ollama_base_url' => 'http://localhost:11434',
+            'ollama_model' => 'gemma3',
+            'hf_token' => '',
+            'hf_model' => 'deepseek-ai/DeepSeek-R1:fastest',
+
+            // Grok AI (xAI) - fallback khi người dùng bật không giới hạn miễn phí
             'grok_api_key' => '',
             'grok_model'   => 'grok-3-mini-fast',  // hoặc grok-3, grok-3-mini
 
-            // ChatGPT / OpenAI - dùng Responses API
+            // ChatGPT / OpenAI - chỉ dùng nếu người dùng muốn
             'openai_api_key' => '',
             'openai_model'   => 'chat-latest',
 
-            // Gemini AI - dùng để tạo ảnh (Imagen) + fallback text
+            // Gemini AI - fallback text / image nếu người dùng muốn
             'gemini_api_key' => '',
             'gemini_model'   => 'gemini-2.5-flash-lite',
 
@@ -58,11 +67,17 @@ class FootballAutoWorkflow {
             'max_articles' => 5,        // Số bài mỗi nguồn
             'date_filter' => 'both',    // today, yesterday, both
             'fetch_full_content' => false, // Lấy nội dung đầy đủ (chậm hơn)
+            'article_links' => [],       // Link bài viết người dùng gửi
+            'article_links_file' => '',  // File chứa link, mỗi dòng một URL
+            'avoid_recent_duplicates' => true,
+            'article_history_file' => './cache/article_history.json',
+            'article_history_days' => 14,
+            'max_total_articles' => 8,
 
             // Bài đăng
             'post_style' => 'tong_hop', // tong_hop = tổng hợp nhiều tin, don_le = 1 tin 1 bài
             'max_posts' => 3,           // Số bài đăng tối đa mỗi lần chạy
-            'generate_image' => true,   // Có tạo ảnh AI không
+            'generate_image' => false,   // Có tạo ảnh AI không
 
             // Thư mục
             'image_folder' => './images/',
@@ -72,6 +87,8 @@ class FootballAutoWorkflow {
         ], $config);
 
         $this->gemini_api_key = $this->config['gemini_api_key'];
+        $this->ollama_base_url = rtrim($this->config['ollama_base_url'] ?? '', '/');
+        $this->hf_token = $this->config['hf_token'] ?? '';
         $this->grok_api_key   = $this->config['grok_api_key'];
         $this->openai_api_key = $this->config['openai_api_key'];
         $this->log_file = $this->config['log_file'];
@@ -128,7 +145,7 @@ class FootballAutoWorkflow {
         try {
             // ─── BƯỚC 1: Thu thập tin tức ───
             $this->log("📰 BƯỚC 1: Thu thập tin tức bóng đá...");
-            $articles = $this->scraper->fetchAllNews();
+            $articles = $this->fetchInputArticles();
 
             if (empty($articles)) {
                 $this->log("❌ Không tìm thấy tin tức nào!");
@@ -169,10 +186,12 @@ class FootballAutoWorkflow {
     private function createSummaryPost($compiled_content, $articles) {
         $results = [];
 
-        // ─── Tóm tắt bằng AI (Grok ưu tiên → fallback Gemini) ───
+        // ─── Tóm tắt bằng AI ───
         $this->log("🤖 Đang gửi nội dung cho AI tóm tắt...");
 
-        $summary_prompt = $this->buildSummaryPrompt($compiled_content);
+        $summary_prompt = $this->hasManualLinks()
+            ? $this->buildDailyLinksPrompt($compiled_content)
+            : $this->buildSummaryPrompt($compiled_content);
         $summary_result = $this->callAI($summary_prompt);
 
         if (!$summary_result['success']) {
@@ -183,12 +202,10 @@ class FootballAutoWorkflow {
         $facebook_post = $summary_result['text'];
         $this->log("✅ Đã tạo bài đăng Facebook (via " . $summary_result['provider'] . ")");
 
-        // Lưu bài đăng ra file
-        $this->saveOutput('summary_post', $facebook_post);
-
-        // ─── Tạo ảnh minh họa ───
-        $image_path = null;
-        if ($this->config['generate_image']) {
+        // ─── Lấy ảnh từ link bài viết; nếu không có mới tạo ảnh AI ───
+        $image_paths = $this->downloadArticleImages($articles);
+        $image_path = $image_paths[0] ?? null;
+        if (!$image_path && $this->config['generate_image']) {
             $this->log("🎨 Đang tạo ảnh minh họa bằng AI...");
 
             $image_prompt = $this->buildImagePrompt($articles);
@@ -196,11 +213,15 @@ class FootballAutoWorkflow {
 
             if ($image_result['success']) {
                 $image_path = $image_result['image_path'];
+                $image_paths = [$image_path];
                 $this->log("✅ Đã tạo ảnh: " . $image_result['filename']);
             } else {
                 $this->log("⚠️ Không thể tạo ảnh: " . $image_result['message']);
             }
         }
+
+        // Lưu bài đăng ra file sau khi biết ảnh đính kèm
+        $this->saveOutput('summary_post', $facebook_post, $image_path, $articles, $summary_result['provider'] ?? 'unknown', $image_paths);
 
         // ─── Đăng lên Facebook ───
         if (!empty($this->config['page_id']) && !empty($this->config['page_access_token'])) {
@@ -285,6 +306,272 @@ class FootballAutoWorkflow {
         return $results;
     }
 
+    private function fetchInputArticles() {
+        $links = $this->getArticleLinks();
+        $manual = !empty($links);
+        if (!empty($links)) {
+            $this->log("🔗 Dùng " . count($links) . " link bài viết người dùng gửi");
+            $articles = $this->scraper->fetchFromLinks($links);
+        } else {
+            $articles = $this->scraper->fetchAllNews();
+        }
+
+        $articles = $this->scraper->deduplicateArticles($articles);
+
+        if (!empty($this->config['avoid_recent_duplicates'])) {
+            $articles = $this->filterRecentDuplicateArticles($articles, $manual);
+        }
+
+        $limit = (int)($this->config['max_total_articles'] ?? 8);
+        if ($limit > 0 && count($articles) > $limit) {
+            $articles = array_slice($articles, 0, $limit);
+            $this->log("Giới hạn bản tin còn {$limit} tin mới nhất để bài đăng gọn hơn");
+        }
+
+        return array_values($articles);
+    }
+
+    private function getArticleLinks() {
+        $links = [];
+
+        if (!empty($this->config['article_links']) && is_array($this->config['article_links'])) {
+            $links = array_merge($links, $this->config['article_links']);
+        }
+
+        $file = $this->config['article_links_file'] ?? '';
+        if ($file && file_exists($file)) {
+            $raw = file_get_contents($file);
+            $lines = preg_split('/[\r\n,]+/', $raw);
+            $links = array_merge($links, $lines ?: []);
+        }
+
+        $clean = [];
+        foreach ($links as $link) {
+            $link = trim((string) $link);
+            if (filter_var($link, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $link) && !in_array($link, $clean, true)) {
+                $clean[] = $link;
+            }
+        }
+        return $clean;
+    }
+
+    private function hasManualLinks() {
+        return !empty($this->getArticleLinks());
+    }
+
+    private function filterRecentDuplicateArticles($articles, $manual = false) {
+        $history = $this->loadArticleHistory();
+        if (empty($history) || empty($articles)) {
+            return $articles;
+        }
+
+        $fresh = [];
+        $skipped = 0;
+        foreach ($articles as $article) {
+            if ($this->articleWasUsedRecently($article, $history)) {
+                $skipped++;
+                continue;
+            }
+            $fresh[] = $article;
+        }
+
+        if ($skipped > 0) {
+            $scope = $manual ? 'link thủ công' : 'nguồn tự động';
+            $this->log("Đã bỏ qua {$skipped} tin/link đã dùng gần đây ({$scope})");
+        }
+
+        return array_values($fresh);
+    }
+
+    private function articleWasUsedRecently($article, $history) {
+        $fp = $this->scraper->articleFingerprint($article);
+        $title = $article['title'] ?? '';
+
+        foreach ($history as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            if (!empty($fp['link_hash']) && !empty($record['link_hash']) && $fp['link_hash'] === $record['link_hash']) {
+                return true;
+            }
+            if (!empty($fp['title_hash']) && !empty($record['title_hash']) && $fp['title_hash'] === $record['title_hash']) {
+                return true;
+            }
+            $old_title = $record['title_key'] ?? ($record['title'] ?? '');
+            if ($title && $old_title && $this->scraper->titlesAreSimilar($title, $old_title)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function loadArticleHistory() {
+        $file = $this->config['article_history_file'] ?? '';
+        if (!$file || !file_exists($file)) {
+            return [];
+        }
+
+        $data = json_decode(file_get_contents($file), true);
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $days = max(1, (int)($this->config['article_history_days'] ?? 14));
+        $cutoff = strtotime("-{$days} days");
+        $fresh = [];
+
+        foreach ($data as $record) {
+            $used_at = strtotime($record['used_at'] ?? 'now');
+            if ($used_at >= $cutoff) {
+                $fresh[] = $record;
+            }
+        }
+
+        return $fresh;
+    }
+
+    private function saveArticleHistory($history) {
+        $file = $this->config['article_history_file'] ?? '';
+        if (!$file) {
+            return;
+        }
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        file_put_contents($file, json_encode(array_values($history), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function rememberArticleHistory($articles) {
+        if (empty($this->config['avoid_recent_duplicates']) || empty($articles)) {
+            return;
+        }
+
+        $history = $this->loadArticleHistory();
+        $index = [];
+        foreach ($history as $record) {
+            if (!empty($record['link_hash'])) {
+                $index['l:' . $record['link_hash']] = true;
+            }
+            if (!empty($record['title_hash'])) {
+                $index['t:' . $record['title_hash']] = true;
+            }
+        }
+
+        $added = 0;
+        foreach ($articles as $article) {
+            $fp = $this->scraper->articleFingerprint($article);
+            $dedupe_key = !empty($fp['link_hash']) ? 'l:' . $fp['link_hash'] : 't:' . $fp['title_hash'];
+            if (!$dedupe_key || isset($index[$dedupe_key])) {
+                continue;
+            }
+
+            $history[] = [
+                'used_at' => date('Y-m-d H:i:s'),
+                'title' => $article['title'] ?? '',
+                'link' => $article['link'] ?? '',
+                'source' => $article['source'] ?? '',
+                'link_hash' => $fp['link_hash'],
+                'title_hash' => $fp['title_hash'],
+                'title_key' => $fp['title_key'],
+            ];
+            $index[$dedupe_key] = true;
+            $added++;
+        }
+
+        if ($added > 0) {
+            $this->saveArticleHistory(array_slice($history, -300));
+            $this->log("Đã lưu {$added} dấu vết tin vào bộ chống trùng");
+        }
+    }
+
+    private function downloadArticleImage($articles) {
+        $paths = $this->downloadArticleImages($articles, 1);
+        return $paths[0] ?? null;
+    }
+
+    private function downloadArticleImages($articles, $limit = 4) {
+        $paths = [];
+        $seen = [];
+
+        foreach ($articles as $article) {
+            $image_url = trim($article['image'] ?? '');
+            if (!$image_url || !preg_match('/^https?:\/\//i', $image_url)) {
+                continue;
+            }
+            if (isset($seen[$image_url])) {
+                continue;
+            }
+            $seen[$image_url] = true;
+
+            $this->log("🖼️ Đang lấy ảnh từ bài viết: {$image_url}");
+            $path = $this->downloadImageFile($image_url, $article['link'] ?? '');
+            if ($path) {
+                $this->log("✅ Đã lưu ảnh bài viết: " . basename($path));
+                $paths[] = $path;
+                if (count($paths) >= $limit) {
+                    break;
+                }
+            }
+        }
+
+        if (empty($paths)) {
+            $this->log("ℹ️ Không tìm thấy ảnh hợp lệ trong các link bài viết");
+        }
+        return $paths;
+    }
+
+    private function downloadImageFile($url, $referer = '') {
+        try {
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => 45,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                CURLOPT_HTTPHEADER => array_filter([
+                    'Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                    $referer ? 'Referer: ' . $referer : '',
+                ]),
+            ]);
+
+            $data = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $content_type = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: '';
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($error || $http_code >= 400 || empty($data) || strlen($data) < 1024) {
+                $this->log("⚠️ Không tải được ảnh ({$http_code}): {$error}");
+                return null;
+            }
+
+            $ext = $this->imageExtension($content_type, $url);
+            $filename = 'article_image_' . date('Ymd_His') . '_' . uniqid() . '.' . $ext;
+            $path = rtrim($this->config['output_dir'], '/\\') . DIRECTORY_SEPARATOR . $filename;
+            file_put_contents($path, $data);
+            return $path;
+        } catch (Exception $e) {
+            $this->log("⚠️ Lỗi tải ảnh bài viết: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function imageExtension($content_type, $url) {
+        $content_type = strtolower((string) $content_type);
+        if (strpos($content_type, 'png') !== false) return 'png';
+        if (strpos($content_type, 'webp') !== false) return 'webp';
+        if (strpos($content_type, 'gif') !== false) return 'gif';
+        if (preg_match('/\.(png|jpe?g|webp|gif)(\?|$)/i', $url, $m)) {
+            return strtolower($m[1] === 'jpeg' ? 'jpg' : $m[1]);
+        }
+        return 'jpg';
+    }
+
     /**
      * ═══════════════════════════════════════════════
      *  CÁC PROMPT AI
@@ -319,6 +606,29 @@ Yêu cầu quan trọng:
 - Không đề cập nguồn tin
 - Sử dụng emoji hợp lý, đẹp mắt
 - Kết thúc bằng câu kêu gọi bình luận rõ ràng";
+    }
+
+    /**
+     * Prompt cho bài cập nhật hằng ngày từ link người dùng gửi.
+     */
+    private function buildDailyLinksPrompt($compiled_content) {
+        return "Bạn là biên tập viên fanpage bóng đá. Người dùng đã gửi các link bài viết để tạo một bài cập nhật hằng ngày.
+
+--- DỮ LIỆU TỪ LINK ---
+{$compiled_content}
+--- HẾT DỮ LIỆU ---
+
+Hãy viết MỘT bài đăng Facebook tiếng Việt theo phong cách cập nhật trong ngày:
+- Mở đầu bằng hook ngắn, đúng trọng tâm, có ngày hôm nay nếu phù hợp
+- Gom các tin thành 3-5 gạch đầu dòng rõ ràng, mỗi tin 1-2 câu
+- Chỉ dùng thông tin có trong dữ liệu, không bịa thêm chi tiết
+- Viết tự nhiên, dễ đọc, phù hợp fanpage bóng đá
+- Có câu hỏi mở cuối bài để kéo bình luận
+- Thêm 3-6 hashtag phù hợp
+- Tổng bài khoảng 150-260 từ
+- Không ghi phần giải thích, không ghi 'dưới đây là', chỉ trả về nội dung bài đăng sẵn sàng đăng
+
+Lưu ý: app sẽ tự đính kèm ảnh lấy từ link bài viết, nên caption phải hợp với ảnh tin tức bóng đá.";
     }
 
     /**
@@ -358,39 +668,168 @@ Yêu cầu:
      */
 
     /**
-     * Dispatcher AI: thử Grok trước, fallback sang Gemini nếu Grok không có key hoặc lỗi
+     * Dispatcher AI: ưu tiên công cụ miễn phí trước.
      * Trả về ['success', 'text', 'provider']
      */
     private function callAI($prompt) {
-        // Ưu tiên Grok nếu có key
-        if (!empty($this->grok_api_key)) {
-            $result = $this->callGrok($prompt);
+        $free_only = !empty($this->config['free_ai_only']);
+
+        // Ưu tiên Ollama local nếu có
+        if (!empty($this->ollama_base_url)) {
+            $result = $this->callOllama($prompt);
             if ($result['success']) {
                 return $result;
             }
-            $this->log("⚠️ Grok thất bại ({$result['message']}), thử ChatGPT...");
+            $this->log("⚠️ Ollama thất bại ({$result['message']}), thử Hugging Face...");
         }
 
-        // Fallback ChatGPT / OpenAI
-        if (!empty($this->openai_api_key)) {
-            $result = $this->callOpenAI($prompt);
+        // Hugging Face free tier
+        if (!empty($this->hf_token)) {
+            $result = $this->callHuggingFace($prompt);
             if ($result['success']) {
                 return $result;
             }
-            $this->log("⚠️ ChatGPT thất bại ({$result['message']}), thử Gemini...");
+            $this->log("⚠️ Hugging Face thất bại ({$result['message']}), thử Gemini...");
         }
 
-        // Fallback Gemini
+        // Gemini fallback
         if (!empty($this->gemini_api_key)) {
             $result = $this->callGemini($prompt);
             if ($result['success']) {
                 return $result;
             }
             $this->log("⚠️ Gemini cũng thất bại: " . $result['message']);
-            return $result;
+            if ($free_only) {
+                return $result;
+            }
         }
 
-        return ['success' => false, 'text' => '', 'provider' => 'none', 'message' => 'Không có AI key nào được cấu hình'];
+        if ($free_only) {
+            return ['success' => false, 'text' => '', 'provider' => 'none', 'message' => 'Chưa cấu hình Ollama, Hugging Face hoặc Gemini free-tier'];
+        }
+
+        // Fallback OpenAI / Grok nếu người dùng muốn dùng dịch vụ trả phí
+        if (!empty($this->openai_api_key)) {
+            $result = $this->callOpenAI($prompt);
+            if ($result['success']) {
+                return $result;
+            }
+            $next_ai = !empty($this->grok_api_key) ? 'thử Grok...' : 'chưa có Grok key, thử Gemini...';
+            $this->log("⚠️ ChatGPT thất bại ({$result['message']}), {$next_ai}");
+        }
+
+        if (!empty($this->grok_api_key)) {
+            $result = $this->callGrok($prompt);
+            if ($result['success']) {
+                return $result;
+            }
+            $this->log("⚠️ Grok thất bại ({$result['message']}), thử Gemini...");
+        }
+
+        return ['success' => false, 'text' => '', 'provider' => 'none', 'message' => 'Không có AI provider nào được cấu hình'];
+    }
+
+    /**
+     * Ollama local API - miễn phí, chạy trên máy người dùng.
+     */
+    private function callOllama($prompt) {
+        try {
+            $model = $this->config['ollama_model'] ?? 'gemma3';
+            $url = rtrim($this->ollama_base_url, '/') . '/api/chat';
+            $data = [
+                'model' => $model,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'Bạn là chuyên gia content bóng đá Việt Nam. Viết bài đăng Facebook hấp dẫn, tự nhiên, giàu cảm xúc bằng tiếng Việt.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $prompt
+                    ]
+                ],
+                'stream' => false
+            ];
+
+            $response = $this->makeRequest($url, $data);
+            if (!$response['success']) {
+                return ['success' => false, 'text' => '', 'provider' => 'ollama', 'message' => $response['message']];
+            }
+
+            $result = $response['data'];
+            $text = $result['message']['content'] ?? '';
+            if (!empty($text)) {
+                $this->log("✅ Ollama ({$model}) tạo bài thành công");
+                return ['success' => true, 'text' => trim($text), 'provider' => 'ollama'];
+            }
+
+            return ['success' => false, 'text' => '', 'provider' => 'ollama', 'message' => 'Ollama không trả về nội dung'];
+        } catch (Exception $e) {
+            return ['success' => false, 'text' => '', 'provider' => 'ollama', 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Hugging Face free tier via router API.
+     */
+    private function callHuggingFace($prompt) {
+        try {
+            $model = $this->config['hf_model'] ?? 'deepseek-ai/DeepSeek-R1:fastest';
+            $url = 'https://router.huggingface.co/v1/chat/completions';
+
+            $data = [
+                'model' => $model,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'Bạn là chuyên gia content bóng đá Việt Nam. Viết bài đăng Facebook hấp dẫn, tự nhiên, giàu cảm xúc bằng tiếng Việt.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $prompt
+                    ]
+                ],
+                'temperature' => 0.8,
+                'max_tokens' => 1024,
+            ];
+
+            $ch = curl_init();
+            $json_data = json_encode($data, JSON_UNESCAPED_UNICODE);
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $json_data,
+                CURLOPT_TIMEOUT => 60,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $this->hf_token,
+                    'Content-Length: ' . strlen($json_data)
+                ]
+            ]);
+
+            $result = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            if ($error) {
+                return ['success' => false, 'text' => '', 'provider' => 'huggingface', 'message' => "cURL: $error"];
+            }
+
+            $decoded = json_decode($result, true);
+            if ($http_code >= 200 && $http_code < 300 && isset($decoded['choices'][0]['message']['content'])) {
+                $text = trim($decoded['choices'][0]['message']['content']);
+                $this->log("✅ Hugging Face ({$model}) tạo bài thành công");
+                return ['success' => true, 'text' => $text, 'provider' => 'huggingface'];
+            }
+
+            $err_msg = $decoded['error']['message'] ?? "HTTP $http_code";
+            return ['success' => false, 'text' => '', 'provider' => 'huggingface', 'message' => $err_msg];
+        } catch (Exception $e) {
+            return ['success' => false, 'text' => '', 'provider' => 'huggingface', 'message' => $e->getMessage()];
+        }
     }
 
     /**
@@ -778,7 +1217,7 @@ Yêu cầu:
     /**
      * Lưu output ra file txt + json (để Python chrome_poster.py đọc)
      */
-    private function saveOutput($name, $content) {
+    private function saveOutput($name, $content, $image_path = null, $articles = [], $ai_provider = 'unknown', $image_paths = []) {
         $timestamp = date('Ymd_His');
 
         // Lưu txt
@@ -791,8 +1230,15 @@ Yêu cầu:
             'post_content' => $content,
             'timestamp'    => date('Y-m-d H:i:s'),
             'source_file'  => basename($txt_file),
+            'image_path'    => $image_path,
+            'image_paths'   => array_values(array_filter($image_paths ?: [$image_path])),
+            'ai_provider'   => $ai_provider,
+            'article_links' => array_values(array_filter(array_map(function($article) {
+                return $article['link'] ?? '';
+            }, $articles))),
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         file_put_contents($json_file, $json_data);
+        $this->rememberArticleHistory($articles);
 
         $this->log("💾 Đã lưu output: $txt_file");
         $this->log("📋 JSON sẵn sàng cho Chrome poster: $json_file");
@@ -826,7 +1272,13 @@ Yêu cầu:
      * Hữu ích để xem trước nội dung
      */
     public function previewNews() {
-        $articles = $this->scraper->fetchAllNews();
+        $articles = $this->fetchInputArticles();
+        if (empty($articles)) {
+            return [
+                'articles' => [],
+                'compiled_content' => 'Không có tin mới sau khi lọc trùng.'
+            ];
+        }
         $compiled = $this->scraper->compileNewsContent($articles);
         return [
             'articles' => $articles,
@@ -839,16 +1291,36 @@ Yêu cầu:
      * Hữu ích để xem trước bài đăng
      */
     public function previewPost() {
-        $articles = $this->scraper->fetchAllNews();
+        $articles = $this->fetchInputArticles();
+        if (empty($articles)) {
+            return [
+                'articles_count' => 0,
+                'post_content' => 'Không có tin mới sau khi lọc trùng. Hãy thêm link mới hoặc chờ nguồn tin mới cập nhật.',
+                'status' => 'error',
+                'ai_provider' => 'dedupe',
+                'image_path' => null,
+                'image_paths' => [],
+            ];
+        }
         $compiled = $this->scraper->compileNewsContent($articles, $this->config['fetch_full_content']);
-        $prompt = $this->buildSummaryPrompt($compiled);
+        $prompt = $this->hasManualLinks()
+            ? $this->buildDailyLinksPrompt($compiled)
+            : $this->buildSummaryPrompt($compiled);
         $result = $this->callAI($prompt);
+        $image_paths = $result['success'] ? $this->downloadArticleImages($articles) : [];
+        $image_path = $image_paths[0] ?? null;
+
+        if ($result['success']) {
+            $this->saveOutput('summary_post', $result['text'], $image_path, $articles, $result['provider'] ?? 'unknown', $image_paths);
+        }
 
         return [
             'articles_count' => count($articles),
             'post_content' => $result['success'] ? $result['text'] : 'Lỗi: ' . $result['message'],
             'status' => $result['success'] ? 'success' : 'error',
-            'ai_provider' => $result['provider'] ?? 'unknown'
+            'ai_provider' => $result['provider'] ?? 'unknown',
+            'image_path' => $image_path,
+            'image_paths' => $image_paths,
         ];
     }
 }

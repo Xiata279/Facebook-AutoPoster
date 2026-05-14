@@ -115,7 +115,14 @@ class FootballNewsScraper {
             return strtotime($b['published_at'] ?? '0') - strtotime($a['published_at'] ?? '0');
         });
 
-        $this->log("Tổng cộng đã thu thập " . count($all_articles) . " tin tức");
+        $before_dedupe = count($all_articles);
+        $all_articles = $this->deduplicateArticles($all_articles);
+        $removed = $before_dedupe - count($all_articles);
+        if ($removed > 0) {
+            $this->log("Đã loại {$removed} tin trùng trong lần quét hiện tại");
+        }
+
+        $this->log("Tổng cộng đã thu thập " . count($all_articles) . " tin tức sau khi lọc trùng");
 
         // Lưu cache
         $this->saveCache($all_articles);
@@ -146,6 +153,7 @@ class FootballNewsScraper {
             }
 
             $articles = $this->filterByDate($articles);
+            $articles = $this->deduplicateArticles($articles);
             $articles = array_slice($articles, 0, $this->max_articles_per_source);
 
             $this->log("Đã thu thập " . count($articles) . " tin từ {$source['name']}");
@@ -155,6 +163,99 @@ class FootballNewsScraper {
             $this->log("Lỗi: " . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Thu thập bài viết từ danh sách link người dùng gửi.
+     *
+     * @param array $links Danh sách URL bài viết
+     * @return array
+     */
+    public function fetchFromLinks($links) {
+        $articles = [];
+        $seen = [];
+
+        foreach ($links as $url) {
+            $url = trim($url);
+            if (!$this->isValidUrl($url) || isset($seen[$url])) {
+                continue;
+            }
+            $seen[$url] = true;
+
+            $this->log("Đang đọc bài viết từ link: {$url}");
+            $article = $this->fetchArticleFromUrl($url);
+            if (!empty($article['title']) || !empty($article['full_content'])) {
+                $articles[] = $article;
+            }
+
+            usleep(350000);
+        }
+
+        $before_dedupe = count($articles);
+        $articles = $this->deduplicateArticles($articles);
+        $removed = $before_dedupe - count($articles);
+        if ($removed > 0) {
+            $this->log("Đã loại {$removed} link/bài thủ công bị trùng");
+        }
+
+        $this->log("Đã đọc " . count($articles) . " bài viết từ link thủ công");
+        $this->saveCache($articles);
+        return $articles;
+    }
+
+    /**
+     * Đọc title, mô tả, ảnh đại diện và nội dung từ một URL bài viết.
+     */
+    public function fetchArticleFromUrl($url) {
+        $html = $this->httpGet($url);
+        if (empty($html)) {
+            return [
+                'title' => $url,
+                'link' => $url,
+                'description' => '',
+                'image' => '',
+                'published_at' => date('Y-m-d H:i:s'),
+                'source' => parse_url($url, PHP_URL_HOST) ?: 'Link thủ công',
+                'full_content' => '',
+            ];
+        }
+
+        libxml_use_internal_errors(true);
+        $doc = new DOMDocument();
+        $doc->loadHTML('<?xml encoding="UTF-8">' . $html);
+        $xpath = new DOMXPath($doc);
+
+        $title = $this->meta($xpath, 'property', 'og:title')
+            ?: $this->meta($xpath, 'name', 'twitter:title')
+            ?: $this->firstText($xpath, ['//h1', '//title'])
+            ?: $url;
+
+        $description = $this->meta($xpath, 'property', 'og:description')
+            ?: $this->meta($xpath, 'name', 'description')
+            ?: $this->meta($xpath, 'name', 'twitter:description')
+            ?: '';
+
+        $image = $this->meta($xpath, 'property', 'og:image')
+            ?: $this->meta($xpath, 'name', 'twitter:image')
+            ?: $this->firstImage($xpath);
+        $image = $this->absoluteUrl($image, $url);
+
+        $published = $this->meta($xpath, 'property', 'article:published_time')
+            ?: $this->meta($xpath, 'name', 'pubdate')
+            ?: $this->meta($xpath, 'name', 'publishdate')
+            ?: date('Y-m-d H:i:s');
+
+        $content = $this->extractArticleText($xpath);
+
+        return [
+            'title' => trim($title),
+            'link' => $url,
+            'description' => trim($description),
+            'image' => $image,
+            'published_at' => date('Y-m-d H:i:s', strtotime($published) ?: time()),
+            'source' => parse_url($url, PHP_URL_HOST) ?: 'Link thủ công',
+            'full_content' => $content,
+        ];
     }
 
     /**
@@ -373,38 +474,7 @@ class FootballNewsScraper {
             $doc = new DOMDocument();
             $doc->loadHTML('<?xml encoding="UTF-8">' . $html);
             $xpath = new DOMXPath($doc);
-
-            // Tìm nội dung bài viết - thử nhiều selector phổ biến
-            $selectors = [
-                '//article//div[contains(@class, "content")]',
-                '//div[contains(@class, "fck_detail")]',
-                '//div[contains(@class, "article-body")]',
-                '//div[contains(@class, "detail-content")]',
-                '//div[contains(@class, "content-detail")]',
-                '//div[contains(@class, "the_content")]',
-                '//div[contains(@class, "post-content")]',
-                '//div[@id="main-detail-body"]',
-                '//article',
-            ];
-
-            foreach ($selectors as $selector) {
-                $nodes = $xpath->query($selector);
-                if ($nodes->length > 0) {
-                    $content = '';
-                    $paragraphs = $xpath->query('.//p', $nodes->item(0));
-                    foreach ($paragraphs as $p) {
-                        $text = trim($p->textContent);
-                        if (!empty($text) && strlen($text) > 20) {
-                            $content .= $text . "\n\n";
-                        }
-                    }
-                    if (!empty($content)) {
-                        return trim($content);
-                    }
-                }
-            }
-
-            return '';
+            return $this->extractArticleText($xpath);
         } catch (Exception $e) {
             $this->log("Lỗi khi lấy nội dung bài viết: " . $e->getMessage());
             return '';
@@ -434,6 +504,141 @@ class FootballNewsScraper {
     }
 
     /**
+     * Loại tin trùng theo link, tiêu đề chuẩn hóa và độ giống tiêu đề.
+     */
+    public function deduplicateArticles($articles) {
+        $unique = [];
+        $seen_links = [];
+        $seen_titles = [];
+
+        foreach ($articles as $article) {
+            if (!is_array($article)) {
+                continue;
+            }
+
+            $title = trim((string)($article['title'] ?? ''));
+            $link = trim((string)($article['link'] ?? ''));
+            if ($title === '' && $link === '') {
+                continue;
+            }
+
+            $link_key = $this->normalizeUrl($link);
+            if ($link_key !== '' && isset($seen_links[$link_key])) {
+                continue;
+            }
+
+            $title_key = $this->normalizeTitle($title);
+            if ($title_key !== '') {
+                if (isset($seen_titles[$title_key])) {
+                    continue;
+                }
+
+                $similar = false;
+                foreach ($seen_titles as $seen_title => $_) {
+                    if ($this->isSimilarTitle($title_key, $seen_title)) {
+                        $similar = true;
+                        break;
+                    }
+                }
+                if ($similar) {
+                    continue;
+                }
+            }
+
+            if ($link_key !== '') {
+                $seen_links[$link_key] = true;
+            }
+            if ($title_key !== '') {
+                $seen_titles[$title_key] = true;
+            }
+            $unique[] = $article;
+        }
+
+        return array_values($unique);
+    }
+
+    public function articleFingerprint($article) {
+        $link_key = $this->normalizeUrl($article['link'] ?? '');
+        $title_key = $this->normalizeTitle($article['title'] ?? '');
+        return [
+            'link_key' => $link_key,
+            'title_key' => $title_key,
+            'link_hash' => $link_key !== '' ? sha1($link_key) : '',
+            'title_hash' => $title_key !== '' ? sha1($title_key) : '',
+        ];
+    }
+
+    public function titlesAreSimilar($a, $b) {
+        return $this->isSimilarTitle($this->normalizeTitle($a), $this->normalizeTitle($b));
+    }
+
+    private function normalizeTitle($title) {
+        $title = html_entity_decode((string)$title, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $title = $this->lower($title);
+        $title = preg_replace('/\s+/u', ' ', $title);
+        $title = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $title);
+        $title = preg_replace('/\b(video|clip|live|truc tiep|trực tiếp|mới nhất|cập nhật)\b/u', ' ', $title);
+        $title = preg_replace('/\s+/u', ' ', $title);
+        return trim($title);
+    }
+
+    private function normalizeUrl($url) {
+        $url = trim((string)$url);
+        if ($url === '') {
+            return '';
+        }
+
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host'])) {
+            return rtrim($this->lower($url), '/');
+        }
+
+        $scheme = $this->lower($parts['scheme'] ?? 'https');
+        $host = preg_replace('/^www\./i', '', $this->lower($parts['host']));
+        $path = $parts['path'] ?? '';
+        $query = [];
+
+        if (!empty($parts['query'])) {
+            parse_str($parts['query'], $query);
+            foreach (array_keys($query) as $key) {
+                if (preg_match('/^(utm_|fbclid|gclid|zarsrc|ref|source)/i', $key)) {
+                    unset($query[$key]);
+                }
+            }
+            ksort($query);
+        }
+
+        $normalized = "{$scheme}://{$host}" . rtrim($path, '/');
+        if (!empty($query)) {
+            $normalized .= '?' . http_build_query($query);
+        }
+        return $normalized;
+    }
+
+    private function isSimilarTitle($a, $b) {
+        $a = trim((string)$a);
+        $b = trim((string)$b);
+        if ($a === '' || $b === '') {
+            return false;
+        }
+        if ($a === $b) {
+            return true;
+        }
+        if (strlen($a) < 18 || strlen($b) < 18) {
+            return false;
+        }
+
+        similar_text($a, $b, $percent);
+        return $percent >= 88;
+    }
+
+    private function lower($text) {
+        return function_exists('mb_strtolower')
+            ? mb_strtolower((string)$text, 'UTF-8')
+            : strtolower((string)$text);
+    }
+
+    /**
      * Tổng hợp nội dung tin tức thành một văn bản
      * 
      * @param array $articles Danh sách bài viết
@@ -454,10 +659,18 @@ class FootballNewsScraper {
                 $content .= "Mô tả: {$article['description']}\n";
             }
 
+            if (!empty($article['full_content'])) {
+                $content .= "Nội dung:\n{$article['full_content']}\n";
+            }
+
+            if (!empty($article['image'])) {
+                $content .= "Ảnh đại diện: {$article['image']}\n";
+            }
+
             if ($fetch_full_content && !empty($article['link'])) {
                 $this->log("Đang lấy nội dung đầy đủ từ: {$article['link']}");
                 $full = $this->fetchArticleContent($article['link']);
-                if (!empty($full)) {
+                if (!empty($full) && empty($article['full_content'])) {
                     $content .= "Nội dung:\n{$full}\n";
                 }
                 // Tránh bị chặn bởi rate limit
@@ -526,6 +739,113 @@ class FootballNewsScraper {
         }
 
         return $result;
+    }
+
+    private function extractArticleText($xpath) {
+        $selectors = [
+            '//article//div[contains(@class, "content")]',
+            '//div[contains(@class, "fck_detail")]',
+            '//div[contains(@class, "article-body")]',
+            '//div[contains(@class, "detail-content")]',
+            '//div[contains(@class, "content-detail")]',
+            '//div[contains(@class, "the_content")]',
+            '//div[contains(@class, "post-content")]',
+            '//div[contains(@class, "entry-content")]',
+            '//div[contains(@class, "article-content")]',
+            '//div[@id="main-detail-body"]',
+            '//article',
+            '//main',
+        ];
+
+        foreach ($selectors as $selector) {
+            $nodes = $xpath->query($selector);
+            if ($nodes->length > 0) {
+                $content = $this->paragraphText($xpath, $nodes->item(0));
+                if (!empty($content)) {
+                    return mb_substr($content, 0, 5000);
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function paragraphText($xpath, $node) {
+        $content = '';
+        $paragraphs = $xpath->query('.//p', $node);
+        foreach ($paragraphs as $p) {
+            $text = trim(preg_replace('/\s+/', ' ', $p->textContent));
+            if (!empty($text) && mb_strlen($text) > 20) {
+                $content .= $text . "\n\n";
+            }
+        }
+        return trim($content);
+    }
+
+    private function meta($xpath, $attr, $value) {
+        $nodes = $xpath->query("//meta[translate(@{$attr}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='" . strtolower($value) . "']/@content");
+        if ($nodes->length > 0) {
+            return trim($nodes->item(0)->nodeValue);
+        }
+        return '';
+    }
+
+    private function firstText($xpath, $selectors) {
+        foreach ($selectors as $selector) {
+            $nodes = $xpath->query($selector);
+            if ($nodes->length > 0) {
+                $text = trim(preg_replace('/\s+/', ' ', $nodes->item(0)->textContent));
+                if ($text !== '') {
+                    return $text;
+                }
+            }
+        }
+        return '';
+    }
+
+    private function firstImage($xpath) {
+        $nodes = $xpath->query('//article//img | //main//img | //img');
+        foreach ($nodes as $node) {
+            $src = $node->getAttribute('src')
+                ?: $node->getAttribute('data-src')
+                ?: $node->getAttribute('data-original')
+                ?: $node->getAttribute('data-lazy-src');
+            if ($src && !preg_match('/logo|avatar|icon|sprite/i', $src)) {
+                return $src;
+            }
+        }
+        return '';
+    }
+
+    private function absoluteUrl($url, $base_url) {
+        $url = trim((string) $url);
+        if ($url === '') {
+            return '';
+        }
+        if (strpos($url, '//') === 0) {
+            $scheme = parse_url($base_url, PHP_URL_SCHEME) ?: 'https';
+            return $scheme . ':' . $url;
+        }
+        if (preg_match('/^https?:\/\//i', $url)) {
+            return $url;
+        }
+
+        $scheme = parse_url($base_url, PHP_URL_SCHEME) ?: 'https';
+        $host = parse_url($base_url, PHP_URL_HOST);
+        if (!$host) {
+            return $url;
+        }
+        if (strpos($url, '/') === 0) {
+            return "{$scheme}://{$host}{$url}";
+        }
+
+        $path = parse_url($base_url, PHP_URL_PATH) ?: '/';
+        $dir = rtrim(dirname($path), '/\\');
+        return "{$scheme}://{$host}{$dir}/{$url}";
+    }
+
+    private function isValidUrl($url) {
+        return filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url);
     }
 
     /**

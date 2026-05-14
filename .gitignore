@@ -10,6 +10,7 @@ chrome_profile/
 output/
 logs/
 cache/
+input/
 
 # Dashboard (served via XAMPP, not needed in repo)
 dashboard/
