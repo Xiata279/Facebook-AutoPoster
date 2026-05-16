@@ -83,6 +83,15 @@ SCHEDULE_FILE = BASE / "input" / "scheduled_posts.json"
 UI_STATE_FILE = BASE / "input" / "ui_state.json"
 AUTOPILOT_FILE = BASE / "input" / "autopilot.json"
 POST_QUEUE_FILE = BASE / "input" / "post_queue.json"
+PAGE_PROFILES_FILE = BASE / "input" / "page_profiles.json"
+CONTENT_TEMPLATES = {
+    "tin_nong": ("Tin nóng", "Hook mạnh, cập nhật nhanh, ưu tiên thông tin mới nhất."),
+    "nhan_dinh": ("Nhận định", "Giọng phân tích, có góc nhìn chuyên môn và bối cảnh."),
+    "tranh_luan": ("Tranh luận", "Đặt vấn đề mở để kéo bình luận nhưng không giật tít quá đà."),
+    "chuyen_nhuong": ("Chuyển nhượng", "Tập trung tin đồn, khả năng xảy ra, tác động đội hình."),
+    "lich_thi_dau": ("Lịch thi đấu", "Rõ giờ, đối thủ, điểm đáng xem, kêu gọi dự đoán."),
+    "sau_tran": ("Sau trận", "Tóm điểm nhấn, nhân vật nổi bật, cảm xúc sau trận."),
+}
 GEMINI_TEXT_MODELS = [
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
@@ -144,6 +153,7 @@ def write_env(updates: dict, managed_keys=None):
         "FREE_AI_ONLY", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
         "HF_TOKEN", "HF_MODEL",
         "AVOID_RECENT_DUPLICATES", "ARTICLE_HISTORY_DAYS", "MAX_TOTAL_ARTICLES",
+        "POST_STYLE", "CONTENT_TEMPLATE", "MAX_POSTS", "MAX_ARTICLES", "FETCH_FULL_CONTENT",
         "OPENAI_API_KEY", "OPENAI_MODEL",
         "GROK_API_KEY", "GROK_MODEL",
         "GEMINI_API_KEY", "GEMINI_MODEL",
@@ -697,6 +707,13 @@ class App(ctk.CTk):
                                                      text_color=C["muted"], justify="left")
         self.dashboard_autopilot_hint.pack(anchor="w", padx=16, pady=(0, 16))
 
+        report = self._card(p, "Báo cáo vận hành")
+        self.ops_report_box = ctk.CTkTextbox(
+            report, height=112, font=ctk.CTkFont(size=12, family="Courier New"),
+            fg_color=C["input"], text_color=C["text"], border_width=0)
+        self.ops_report_box.pack(fill="x", padx=16, pady=(0, 14))
+        self.ops_report_box.configure(state="disabled")
+
     def _refresh_dashboard(self):
         self.dash_time.configure(text=f"Cập nhật: {datetime.now().strftime('%H:%M:%S  %d/%m/%Y')}")
 
@@ -750,6 +767,28 @@ class App(ctk.CTk):
             self._render_latest_preview()
         if hasattr(self, "queue_box"):
             self._render_post_queue()
+        if hasattr(self, "ops_report_box"):
+            self._render_ops_report()
+
+    def _render_ops_report(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        jobs_today = [j for j in self._scheduled_jobs if (j.get("last_run_at", "")[:10] == today or j.get("date") == today)]
+        success = len([j for j in jobs_today if j.get("last_result") == "success"])
+        failed = len([j for j in jobs_today if j.get("last_result") in ("failed", "chrome_unavailable", "queue_empty") or j.get("status") == "failed"])
+        scheduled = len([j for j in self._scheduled_jobs if j.get("status") == "scheduled"])
+        queue_ready = len(self._post_queue)
+        latest = read_latest_post()
+        image_count = len([p for p in normalize_image_paths(latest) if p and Path(p).exists()])
+        lines = [
+            f"Hôm nay       {len(jobs_today)} lịch liên quan | {success} thành công | {failed} lỗi",
+            f"Hàng đợi      {queue_ready} bài sẵn sàng",
+            f"Bài hiện tại  {len(latest.get('post_content', ''))} ký tự | {image_count} ảnh hợp lệ",
+            f"Lịch mở       {scheduled} lịch đang chờ chạy",
+        ]
+        self.ops_report_box.configure(state="normal")
+        self.ops_report_box.delete("1.0", "end")
+        self.ops_report_box.insert("end", "\n".join(lines))
+        self.ops_report_box.configure(state="disabled")
 
     def _next_schedule_text(self, short=False):
         try:
@@ -784,6 +823,27 @@ class App(ctk.CTk):
         textbox.insert("end", "\n".join(rows[:5 if compact else 20]))
         textbox.configure(state="disabled")
 
+    def _render_week_calendar(self):
+        if not hasattr(self, "week_calendar_box"):
+            return
+        start = datetime.now().date()
+        rows = []
+        for offset in range(7):
+            day = start + timedelta(days=offset)
+            day_jobs = []
+            for job in self._scheduled_jobs:
+                run = self._next_job_run(job)
+                if run and run.date() == day:
+                    action = "full" if job.get("action") == "full" else "post"
+                    src = "auto" if job.get("source") == "autopilot" else "manual"
+                    day_jobs.append(f"{run.strftime('%H:%M')} {src}/{action}/{job.get('status','?')}")
+            label = day.strftime("%d/%m")
+            rows.append(f"{label}  " + (" | ".join(day_jobs) if day_jobs else "trống"))
+        self.week_calendar_box.configure(state="normal")
+        self.week_calendar_box.delete("1.0", "end")
+        self.week_calendar_box.insert("end", "\n".join(rows))
+        self.week_calendar_box.configure(state="disabled")
+
     def _load_post_queue(self):
         try:
             if POST_QUEUE_FILE.exists():
@@ -817,17 +877,18 @@ class App(ctk.CTk):
             "image_paths": images,
         }
 
-    def _queue_latest_post(self, silent=False):
+    def _queue_latest_post(self, silent=False, render=True):
         entry = self._queue_entry_from_latest()
         if not entry:
-            if not silent and hasattr(self, "queue_status"):
+            if not silent and render and hasattr(self, "queue_status"):
                 self.queue_status.configure(text="Chưa có bài mới để thêm vào hàng đợi.", text_color=C["red"])
             return False
         self._post_queue = [x for x in self._post_queue if x.get("id") != entry["id"]]
         self._post_queue.insert(0, entry)
         self._save_post_queue()
-        self._render_post_queue()
-        if not silent and hasattr(self, "queue_status"):
+        if render:
+            self._render_post_queue()
+        if not silent and render and hasattr(self, "queue_status"):
             self.queue_status.configure(text="Đã thêm bài mới nhất vào hàng đợi.", text_color=C["green"])
         return True
 
@@ -866,6 +927,49 @@ class App(ctk.CTk):
             self._post_queue.pop(0)
             self._save_post_queue()
         self._render_post_queue()
+
+    def _queue_selected_index(self):
+        try:
+            value = int(self.queue_index_entry.get().strip())
+        except:
+            value = 1
+        return max(0, min(len(self._post_queue) - 1, value - 1)) if self._post_queue else None
+
+    def _preview_queue_index(self):
+        idx = self._queue_selected_index()
+        if idx is None:
+            if hasattr(self, "queue_status"):
+                self.queue_status.configure(text="Hàng đợi đang trống.", text_color=C["red"])
+            return
+        entry = self._post_queue[idx]
+        self._write_queue_entry_to_latest(entry)
+        self._render_latest_preview()
+        if hasattr(self, "queue_status"):
+            self.queue_status.configure(text=f"Đang xem bài số {idx + 1}.", text_color=C["green"])
+
+    def _drop_queue_index(self):
+        idx = self._queue_selected_index()
+        if idx is None:
+            return
+        self._post_queue.pop(idx)
+        self._save_post_queue()
+        self._render_post_queue()
+        if hasattr(self, "queue_status"):
+            self.queue_status.configure(text=f"Đã bỏ bài số {idx + 1}.", text_color=C["muted"])
+
+    def _move_queue_index(self, delta):
+        idx = self._queue_selected_index()
+        if idx is None:
+            return
+        new_idx = max(0, min(len(self._post_queue) - 1, idx + delta))
+        if new_idx == idx:
+            return
+        self._post_queue[idx], self._post_queue[new_idx] = self._post_queue[new_idx], self._post_queue[idx]
+        self._save_post_queue()
+        self._render_post_queue()
+        if hasattr(self, "queue_index_entry"):
+            self.queue_index_entry.delete(0, "end")
+            self.queue_index_entry.insert(0, str(new_idx + 1))
 
     def _post_first_queue_entry(self):
         entry = self._promote_queue_entry(remove=False)
@@ -932,6 +1036,49 @@ class App(ctk.CTk):
                 pass
         self._preview_img = None
         self.preview_image_lbl.configure(image=None, text="Chưa có ảnh")
+
+    def _preflight_checks(self, require_chrome=False, pages=None, require_image=True):
+        env = read_env()
+        data = read_latest_post()
+        content = data.get("post_content", "").strip()
+        images = normalize_image_paths(data)
+        pages = pages or parse_pages(env.get("FB_PAGES", ""))
+        checks = []
+
+        def add(label, ok, detail):
+            checks.append({"label": label, "ok": bool(ok), "detail": detail})
+
+        add("Page", bool(pages), f"{len(pages)} page" if pages else "Chưa có page đăng bài")
+        if require_chrome:
+            chrome_ok = check_chrome()
+            add("Chrome", chrome_ok, "Đã kết nối" if chrome_ok else "Chrome chưa mở hoặc chưa bật remote debug")
+        add("Caption", len(content) >= 80, f"{len(content)} ký tự" if content else "Chưa có nội dung")
+        add("Độ dài", len(content) <= 2200, "Ổn" if len(content) <= 2200 else "Caption quá dài cho thao tác tự động")
+        hashtags = [word for word in content.split() if word.startswith("#")]
+        add("Hashtag", len(hashtags) <= 10, f"{len(hashtags)} hashtag")
+        existing_images = [p for p in images if p and Path(p).exists()]
+        add("Ảnh", bool(existing_images) if require_image else True,
+            f"{len(existing_images)} ảnh hợp lệ" if existing_images else "Chưa có ảnh hợp lệ")
+        sig = hashlib.sha1(content.encode("utf-8", errors="ignore")).hexdigest()[:12] if content else ""
+        dup_count = len([x for x in self._post_queue if x.get("id") == f"post-{sig}"]) if sig else 0
+        add("Trùng hàng đợi", dup_count <= 1, "Ổn" if dup_count <= 1 else "Có bài trùng trong hàng đợi")
+
+        ok = all(item["ok"] for item in checks)
+        lines = [f"{'OK' if item['ok'] else '!!'}  {item['label']:<15} {item['detail']}" for item in checks]
+        return ok, lines, checks
+
+    def _render_preflight(self, require_chrome=False, pages=None):
+        ok, lines, _checks = self._preflight_checks(require_chrome=require_chrome, pages=pages)
+        if hasattr(self, "preflight_box"):
+            self.preflight_box.configure(state="normal")
+            self.preflight_box.delete("1.0", "end")
+            self.preflight_box.insert("end", "\n".join(lines))
+            self.preflight_box.configure(state="disabled")
+        if hasattr(self, "preflight_status"):
+            self.preflight_status.configure(
+                text="Sẵn sàng đăng" if ok else "Cần xử lý trước khi đăng",
+                text_color=C["green"] if ok else C["red"])
+        return ok, lines
 
     # ════════════ POST ════════════
     def _build_post(self):
@@ -1044,7 +1191,79 @@ class App(ctk.CTk):
         self.links_status = ctk.CTkLabel(link_actions, text="", font=ctk.CTkFont(size=11), text_color=C["muted"])
         self.links_status.pack(side="left", padx=10)
 
+        compose = self._card(p, "Tùy chọn soạn bài")
+        compose_grid = ctk.CTkFrame(compose, fg_color="transparent")
+        compose_grid.pack(fill="x", padx=16, pady=(0, 12))
+        compose_grid.columnconfigure((0, 1, 2, 3), weight=1)
+
+        style_box = ctk.CTkFrame(compose_grid, fg_color=C["panel"], corner_radius=12,
+                                 border_width=1, border_color=C["border"])
+        style_box.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
+        ctk.CTkLabel(style_box, text="KIỂU BÀI", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(10, 6))
+        env_defaults = read_env()
+        self.compose_style_var = ctk.StringVar(value=env_defaults.get("POST_STYLE", "tong_hop"))
+        ctk.CTkRadioButton(style_box, text="Tổng hợp nhiều tin", variable=self.compose_style_var, value="tong_hop",
+                           text_color=C["text"], fg_color=C["accent"]).pack(anchor="w", padx=12, pady=2)
+        ctk.CTkRadioButton(style_box, text="Mỗi tin một bài", variable=self.compose_style_var, value="don_le",
+                           text_color=C["text"], fg_color=C["accent"]).pack(anchor="w", padx=12, pady=(2, 10))
+
+        count_box = ctk.CTkFrame(compose_grid, fg_color=C["panel"], corner_radius=12,
+                                 border_width=1, border_color=C["border"])
+        count_box.grid(row=0, column=1, padx=6, sticky="nsew")
+        ctk.CTkLabel(count_box, text="SỐ BÀI CẦN SOẠN", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(10, 2))
+        self.compose_count_entry = ctk.CTkEntry(count_box, height=38, font=ctk.CTkFont(size=12),
+                                                fg_color=C["input"], border_color=C["border"], text_color=C["text"])
+        self.compose_count_entry.insert(0, env_defaults.get("MAX_POSTS", "1"))
+        self.compose_count_entry.pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkLabel(count_box, text="1-6 bài/lần", font=ctk.CTkFont(size=10),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(0, 10))
+
+        limit_box = ctk.CTkFrame(compose_grid, fg_color=C["panel"], corner_radius=12,
+                                 border_width=1, border_color=C["border"])
+        limit_box.grid(row=0, column=2, padx=6, sticky="nsew")
+        ctk.CTkLabel(limit_box, text="SỐ TIN ĐẦU VÀO", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(10, 2))
+        self.compose_article_limit_entry = ctk.CTkEntry(limit_box, height=38, font=ctk.CTkFont(size=12),
+                                                        fg_color=C["input"], border_color=C["border"], text_color=C["text"])
+        self.compose_article_limit_entry.insert(0, env_defaults.get("MAX_TOTAL_ARTICLES", "8"))
+        self.compose_article_limit_entry.pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkLabel(limit_box, text="3-24 tin mới", font=ctk.CTkFont(size=10),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(0, 10))
+
+        depth_box = ctk.CTkFrame(compose_grid, fg_color=C["panel"], corner_radius=12,
+                                 border_width=1, border_color=C["border"])
+        depth_box.grid(row=0, column=3, padx=(6, 0), sticky="nsew")
+        ctk.CTkLabel(depth_box, text="ĐỘ SÂU NỘI DUNG", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(10, 6))
+        self.compose_full_content_var = ctk.BooleanVar(value=env_defaults.get("FETCH_FULL_CONTENT", "false").lower() == "true")
+        ctk.CTkCheckBox(depth_box, text="Đọc nội dung đầy đủ", variable=self.compose_full_content_var,
+                        onvalue=True, offvalue=False, text_color=C["text"], fg_color=C["accent"]).pack(anchor="w", padx=12, pady=(2, 4))
+        ctk.CTkLabel(depth_box, text="Chậm hơn nhưng kỹ hơn", font=ctk.CTkFont(size=10),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(0, 10))
+
         # Preview bài đăng Facebook
+        template_box = ctk.CTkFrame(compose, fg_color=C["panel"], corner_radius=12,
+                                    border_width=1, border_color=C["border"])
+        template_box.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkLabel(template_box, text="THƯ VIỆN MẪU NỘI DUNG", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=12, pady=(10, 4))
+        template_row = ctk.CTkFrame(template_box, fg_color="transparent")
+        template_row.pack(fill="x", padx=10, pady=(0, 8))
+        self.compose_template_var = ctk.StringVar(value=env_defaults.get("CONTENT_TEMPLATE", "tin_nong"))
+        for key, (label, _hint) in CONTENT_TEMPLATES.items():
+            ctk.CTkRadioButton(
+                template_row, text=label, variable=self.compose_template_var, value=key,
+                text_color=C["text"], fg_color=C["accent"],
+                font=ctk.CTkFont(size=11),
+            ).pack(side="left", padx=(0, 12), pady=4)
+        self.compose_template_hint = ctk.CTkLabel(
+            template_box, text=CONTENT_TEMPLATES.get(self.compose_template_var.get(), CONTENT_TEMPLATES["tin_nong"])[1],
+            font=ctk.CTkFont(size=10), text_color=C["subtle"], justify="left")
+        self.compose_template_hint.pack(anchor="w", padx=12, pady=(0, 10))
+        self.compose_template_var.trace_add("write", lambda *_: self._update_template_hint())
+
         pc = self._card(p, "Preview Facebook")
         preview_shell = ctk.CTkFrame(pc, fg_color="transparent")
         preview_shell.pack(fill="x", padx=16, pady=(0, 10))
@@ -1106,6 +1325,23 @@ class App(ctk.CTk):
             width=170, height=32, command=self._promote_queue_entry,
         ).pack(side="left")
 
+        pf = self._card(p, "Bộ kiểm duyệt trước đăng")
+        pf_actions = ctk.CTkFrame(pf, fg_color="transparent")
+        pf_actions.pack(fill="x", padx=16, pady=(0, 8))
+        self._button(
+            pf_actions, "Kiểm tra trước đăng", variant="primary",
+            width=160, height=32, command=self._render_preflight,
+        ).pack(side="left", padx=(0, 8))
+        self.preflight_status = ctk.CTkLabel(
+            pf_actions, text="Chưa kiểm tra", font=ctk.CTkFont(size=11), text_color=C["muted"])
+        self.preflight_status.pack(side="left", padx=8)
+        self.preflight_box = ctk.CTkTextbox(
+            pf, height=118, font=ctk.CTkFont(size=11, family="Courier New"),
+            fg_color=C["input"], text_color=C["text"], border_width=0)
+        self.preflight_box.pack(fill="x", padx=16, pady=(0, 14))
+        self.preflight_box.insert("end", "Bấm kiểm tra để rà page, Chrome, caption, ảnh và khả năng trùng lặp.\n")
+        self.preflight_box.configure(state="disabled")
+
         # Hàng đợi bài viết
         qc = self._card(p, "Hàng đợi bài viết")
         q_head = ctk.CTkFrame(qc, fg_color="transparent")
@@ -1143,8 +1379,181 @@ class App(ctk.CTk):
             queue_actions, "Xóa hàng đợi", variant="danger",
             width=120, height=32, command=self._clear_post_queue,
         ).pack(side="left")
+        queue_tools = ctk.CTkFrame(qc, fg_color="transparent")
+        queue_tools.pack(fill="x", padx=16, pady=(0, 14))
+        ctk.CTkLabel(queue_tools, text="Bài số", font=ctk.CTkFont(size=11),
+                     text_color=C["muted"]).pack(side="left", padx=(0, 6))
+        self.queue_index_entry = ctk.CTkEntry(
+            queue_tools, width=56, height=30, font=ctk.CTkFont(size=11),
+            fg_color=C["input"], border_color=C["border"], text_color=C["text"])
+        self.queue_index_entry.insert(0, "1")
+        self.queue_index_entry.pack(side="left", padx=(0, 8))
+        self._button(queue_tools, "Xem", variant="secondary", width=72, height=30,
+                     command=self._preview_queue_index).pack(side="left", padx=(0, 6))
+        self._button(queue_tools, "Lên", variant="outline", width=66, height=30,
+                     command=lambda: self._move_queue_index(-1)).pack(side="left", padx=(0, 6))
+        self._button(queue_tools, "Xuống", variant="outline", width=76, height=30,
+                     command=lambda: self._move_queue_index(1)).pack(side="left", padx=(0, 6))
+        self._button(queue_tools, "Bỏ bài chọn", variant="danger", width=110, height=30,
+                     command=self._drop_queue_index).pack(side="left")
         self._render_latest_preview()
         self._render_post_queue()
+
+        # ══════════════════════════════════════════════════════
+        # 🍌 NANO BANANA 2 — AI Image Generator Card
+        # ══════════════════════════════════════════════════════
+        nb_card = self._card(p, "🍌 Nano Banana 2 — Tạo ảnh AI")
+
+        # Info row
+        nb_info = ctk.CTkFrame(nb_card, fg_color=C["panel"], corner_radius=10)
+        nb_info.pack(fill="x", padx=16, pady=(0, 10))
+        ctk.CTkLabel(
+            nb_info,
+            text="Tạo ảnh bằng Gemini API chính thức · Hỗ trợ Flash (nhanh) và Pro (chất lượng cao)",
+            font=ctk.CTkFont(size=11),
+            text_color=C["subtle"],
+        ).pack(anchor="w", padx=12, pady=8)
+
+        # Prompt input
+        ctk.CTkLabel(nb_card, text="Prompt mô tả ảnh cần tạo:",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=C["text"]).pack(anchor="w", padx=16, pady=(0, 4))
+        self.nb_prompt = ctk.CTkTextbox(
+            nb_card, height=72, font=ctk.CTkFont(size=12),
+            fg_color=C["input"], text_color=C["text"], border_width=0, wrap="word",
+        )
+        self.nb_prompt.pack(fill="x", padx=16, pady=(0, 8))
+        self.nb_prompt.insert("end",
+            "Professional football news banner, Vietnamese football, vibrant stadium atmosphere, "
+            "dynamic action shot, dramatic lighting, 4K quality")
+
+        # Options row
+        nb_opts = ctk.CTkFrame(nb_card, fg_color="transparent")
+        nb_opts.pack(fill="x", padx=16, pady=(0, 8))
+        nb_opts.columnconfigure((0, 1, 2, 3), weight=1)
+
+        # Model
+        model_box = ctk.CTkFrame(nb_opts, fg_color=C["panel"], corner_radius=10,
+                                 border_width=1, border_color=C["border"])
+        model_box.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
+        ctk.CTkLabel(model_box, text="MODEL", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=10, pady=(8, 4))
+        self.nb_model_var = ctk.StringVar(value="flash")
+        ctk.CTkRadioButton(model_box, text="⚡ Flash (nhanh, rẻ)",
+                           variable=self.nb_model_var, value="flash",
+                           text_color=C["text"], fg_color=C["accent"],
+                           font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10, pady=2)
+        ctk.CTkRadioButton(model_box, text="💎 Pro (chất lượng cao)",
+                           variable=self.nb_model_var, value="pro",
+                           text_color=C["text"], fg_color=C["accent"],
+                           font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10, pady=(2, 8))
+
+        # Aspect ratio
+        aspect_box = ctk.CTkFrame(nb_opts, fg_color=C["panel"], corner_radius=10,
+                                  border_width=1, border_color=C["border"])
+        aspect_box.grid(row=0, column=1, padx=6, sticky="nsew")
+        ctk.CTkLabel(aspect_box, text="TỶ LỆ ẢNH", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=10, pady=(8, 4))
+        self.nb_aspect_var = ctk.StringVar(value="16:9")
+        ctk.CTkOptionMenu(
+            aspect_box,
+            variable=self.nb_aspect_var,
+            values=["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "21:9"],
+            fg_color=C["input"], button_color=C["accent"],
+            text_color=C["text"], font=ctk.CTkFont(size=11),
+            height=32,
+        ).pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkLabel(aspect_box, text="16:9 = ngang · 9:16 = dọc · 1:1 = vuông",
+                     font=ctk.CTkFont(size=10), text_color=C["subtle"]).pack(anchor="w", padx=10, pady=(0, 8))
+
+        # Options misc
+        misc_box = ctk.CTkFrame(nb_opts, fg_color=C["panel"], corner_radius=10,
+                                border_width=1, border_color=C["border"])
+        misc_box.grid(row=0, column=2, padx=6, sticky="nsew")
+        ctk.CTkLabel(misc_box, text="TÙY CHỌN", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=10, pady=(8, 4))
+        self.nb_transparent_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(misc_box, text="🟢 Nền xanh (xóa nền sau)",
+                        variable=self.nb_transparent_var,
+                        onvalue=True, offvalue=False,
+                        text_color=C["text"], fg_color=C["accent"],
+                        font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10, pady=4)
+        self.nb_auto_attach_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(misc_box, text="📎 Tự gắn vào bài đăng",
+                        variable=self.nb_auto_attach_var,
+                        onvalue=True, offvalue=False,
+                        text_color=C["text"], fg_color=C["accent"],
+                        font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10, pady=(2, 8))
+
+        # Cost stats
+        cost_box = ctk.CTkFrame(nb_opts, fg_color=C["panel"], corner_radius=10,
+                                border_width=1, border_color=C["border"])
+        cost_box.grid(row=0, column=3, padx=(6, 0), sticky="nsew")
+        ctk.CTkLabel(cost_box, text="CHI PHÍ", font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=10, pady=(8, 4))
+        self.nb_cost_lbl = ctk.CTkLabel(
+            cost_box, text="$0.0000\n0 lần tạo",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=C["accent"], justify="left",
+        )
+        self.nb_cost_lbl.pack(anchor="w", padx=10, pady=2)
+        self._button(cost_box, "Làm mới", variant="outline",
+                     width=80, height=24,
+                     command=self._nb_refresh_costs).pack(anchor="w", padx=10, pady=(4, 8))
+
+        # Preview + Actions
+        nb_bottom = ctk.CTkFrame(nb_card, fg_color="transparent")
+        nb_bottom.pack(fill="x", padx=16, pady=(0, 14))
+
+        # Thumbnail preview
+        self.nb_preview_lbl = ctk.CTkLabel(
+            nb_bottom, text="Chưa có ảnh",
+            width=160, height=100,
+            fg_color=C["input"], text_color=C["muted"],
+            corner_radius=8,
+        )
+        self.nb_preview_lbl.pack(side="left", padx=(0, 12))
+
+        nb_action_col = ctk.CTkFrame(nb_bottom, fg_color="transparent")
+        nb_action_col.pack(side="left", fill="both", expand=True)
+
+        # Status label
+        self.nb_status = ctk.CTkLabel(
+            nb_action_col,
+            text="Nhập prompt và nhấn Tạo ảnh để bắt đầu",
+            font=ctk.CTkFont(size=12), text_color=C["muted"], justify="left",
+        )
+        self.nb_status.pack(anchor="w", pady=(0, 8))
+
+        # Result path
+        self.nb_result_path = ctk.CTkLabel(
+            nb_action_col, text="", font=ctk.CTkFont(size=10, family="Courier New"),
+            text_color=C["subtle"], justify="left",
+        )
+        self.nb_result_path.pack(anchor="w", pady=(0, 8))
+
+        # Buttons
+        nb_btn_row = ctk.CTkFrame(nb_action_col, fg_color="transparent")
+        nb_btn_row.pack(anchor="w")
+        self.btn_nb_generate = self._button(
+            nb_btn_row, "🍌 Tạo ảnh AI", variant="primary",
+            width=148, height=36, font_size=13, bold=True,
+            command=self._nb_generate,
+        )
+        self.btn_nb_generate.pack(side="left", padx=(0, 8))
+        self._button(
+            nb_btn_row, "📁 Mở thư mục", variant="secondary",
+            width=120, height=36,
+            command=self._nb_open_output_dir,
+        ).pack(side="left", padx=(0, 8))
+        self._button(
+            nb_btn_row, "📎 Gắn ảnh hiện tại", variant="outline",
+            width=148, height=36,
+            command=self._nb_attach_to_post,
+        ).pack(side="left")
+
+        # Refresh cost on open
+        self._nb_refresh_costs()
 
         # ── Workflow ──
         bf = self._card(p, "Quy trình")
@@ -1172,6 +1581,10 @@ class App(ctk.CTk):
             row, "Soạn bài", variant="primary", width=150, height=36,
             command=lambda: self._run_post_action("generate"))
         self.btn_generate.pack(side="left", padx=(0,8))
+        self.btn_batch_generate = self._button(
+            row, "Soạn hàng loạt", variant="secondary", width=150, height=36,
+            command=self._run_batch_generate)
+        self.btn_batch_generate.pack(side="left", padx=(0,8))
         self.btn_chrome = self._button(
             row, "Đăng qua Chrome", variant="primary", width=160, height=36,
             command=lambda: self._run_post_action("chrome"))
@@ -1409,15 +1822,144 @@ class App(ctk.CTk):
             except:
                 pass
 
+    def _entry_int(self, widget, default, low, high):
+        try:
+            value = int(str(widget.get()).strip())
+        except:
+            value = default
+        return max(low, min(high, value))
+
+    def _update_template_hint(self):
+        if not hasattr(self, "compose_template_hint"):
+            return
+        key = self.compose_template_var.get() if hasattr(self, "compose_template_var") else "tin_nong"
+        self.compose_template_hint.configure(text=CONTENT_TEMPLATES.get(key, CONTENT_TEMPLATES["tin_nong"])[1])
+
+    def _compose_options(self):
+        style = "tong_hop"
+        if hasattr(self, "compose_style_var"):
+            style = self.compose_style_var.get() or "tong_hop"
+        if style not in ("tong_hop", "don_le"):
+            style = "tong_hop"
+        count = self._entry_int(self.compose_count_entry, 1, 1, 6) if hasattr(self, "compose_count_entry") else 1
+        article_limit = self._entry_int(self.compose_article_limit_entry, 8, 3, 24) if hasattr(self, "compose_article_limit_entry") else 8
+        full_content = bool(self.compose_full_content_var.get()) if hasattr(self, "compose_full_content_var") else False
+        template = self.compose_template_var.get() if hasattr(self, "compose_template_var") else "tin_nong"
+        if template not in CONTENT_TEMPLATES:
+            template = "tin_nong"
+        return {
+            "post_style": style,
+            "count": count,
+            "max_total_articles": article_limit,
+            "fetch_full_content": full_content,
+            "content_template": template,
+        }
+
+    def _preview_post_command(self, options=None):
+        cmd = php_command("preview-post")
+        if cmd is None:
+            return None
+        options = options or self._compose_options()
+        cmd.extend([
+            f"--post-style={options.get('post_style', 'tong_hop')}",
+            f"--max-total-articles={int(options.get('max_total_articles', 8))}",
+            "--max-posts=1",
+            f"--full-content={1 if options.get('fetch_full_content') else 0}",
+            f"--content-template={options.get('content_template', 'tin_nong')}",
+        ])
+        return cmd
+
+    def _workflow_buttons(self):
+        names = ["btn_full", "btn_preview", "btn_generate", "btn_batch_generate", "btn_chrome"]
+        return [getattr(self, name) for name in names if hasattr(self, name)]
+
+    def _run_batch_generate(self):
+        self._save_article_links()
+        options = self._compose_options()
+        count = options["count"]
+        if count <= 1:
+            self._run_post_action("generate")
+            return
+        if options["post_style"] == "tong_hop":
+            options["post_style"] = "don_le"
+            if hasattr(self, "compose_style_var"):
+                self.compose_style_var.set("don_le")
+
+        cmd = self._preview_post_command(options)
+        if cmd is None:
+            self.post_status.configure(text="ChÆ°a tÃ¬m tháº¥y PHP. CÃ i XAMPP/WAMP hoáº·c thÃªm PHP vÃ o PATH.", text_color=C["red"])
+            return
+
+        btns = self._workflow_buttons()
+        for b in btns:
+            b.configure(state="disabled")
+        self._set_progress(0.05, f"Đang soạn {count} bài vào hàng đợi...", C["yellow"])
+        self.post_output.configure(state="normal")
+        self.post_output.delete("1.0", "end")
+        self.post_output.insert("end", f"{datetime.now().strftime('%H:%M:%S')} — batch-generate x{count}\n\n")
+        self.post_output.configure(state="disabled")
+
+        def _worker():
+            success = 0
+            failed = 0
+            for i in range(count):
+                start_p = 0.08 + (i / count) * 0.82
+                end_p = 0.08 + ((i + 1) / count) * 0.82
+                label = f"Soạn bài {i + 1}/{count}"
+                self.after(0, self._set_progress, start_p, label, C["yellow"])
+                self.after(0, self._append_post_output, f"\n--- {label} ---\n")
+                try:
+                    if cmd and len(cmd) > 1 and str(cmd[1]).endswith("chrome_poster.py"):
+                        ok_preflight, lines, _checks = self._preflight_checks(require_chrome=True)
+                        if not ok_preflight:
+                            self.after(0, self._append_post_output, "\n".join(["\nPRE-FLIGHT FAILED", *lines, ""]))
+                            final_ok = False
+                            break
+                    last_tick = {"t": time.time(), "p": start_p}
+                    def _line_progress(_line):
+                        now = time.time()
+                        if now - last_tick["t"] > 1.0 and last_tick["p"] < end_p - 0.02:
+                            last_tick["t"] = now
+                            last_tick["p"] = min(end_p - 0.02, last_tick["p"] + 0.03)
+                            self.after(0, self._set_progress, last_tick["p"], label, C["yellow"])
+                    _, ok = self._run_streaming_cmd(self._preview_post_command(options), on_line=_line_progress, timeout=260)
+                    if ok and self._queue_latest_post(silent=True, render=False):
+                        success += 1
+                        self.after(0, self._set_progress, end_p, f"Đã thêm bài {i + 1}/{count} vào hàng đợi", C["accent"])
+                    else:
+                        failed += 1
+                        break
+                except Exception as e:
+                    failed += 1
+                    self.after(0, self._append_post_output, f"\nLỗi: {e}\n")
+                    break
+
+            def _done():
+                ok = success > 0 and failed == 0
+                self._render_latest_preview()
+                self._render_post_queue()
+                self._refresh_dashboard()
+                self._set_progress(1 if ok else 0.98,
+                                   f"Đã soạn {success}/{count} bài." if success else "Chưa soạn được bài mới.",
+                                   C["green"] if ok else C["red"])
+                if hasattr(self, "queue_status"):
+                    self.queue_status.configure(
+                        text=f"Đã thêm {success} bài vào hàng đợi." if success else "Không có bài mới để thêm.",
+                        text_color=C["green"] if success else C["red"])
+                for b in btns:
+                    b.configure(state="normal")
+            self.after(0, _done)
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _run_full_workflow(self):
         """Chạy toàn bộ: PHP scrape + soạn bài → Chrome post"""
         self._save_article_links()
-        preview_cmd = php_command("preview-post")
+        preview_cmd = self._preview_post_command()
         if preview_cmd is None:
             self.post_status.configure(text="Chưa tìm thấy PHP. Cài XAMPP/WAMP hoặc thêm PHP vào PATH.", text_color=C["red"])
             return
 
-        all_btns = [self.btn_full, self.btn_preview, self.btn_generate, self.btn_chrome]
+        all_btns = self._workflow_buttons()
         for b in all_btns: b.configure(state="disabled")
         self._set_progress(0.03, "Đang chuẩn bị quy trình...", C["yellow"])
         self.post_output.configure(state="normal")
@@ -1472,15 +2014,22 @@ class App(ctk.CTk):
         if action in ("preview", "generate"):
             self._save_article_links()
         cmd_map = {
-            "preview":  php_command("preview-post"),
-            "generate": php_command("preview-post"),
+            "preview":  self._preview_post_command(),
+            "generate": self._preview_post_command(),
             "chrome":   [PY, str(BASE/"chrome_poster.py")],
         }
         if cmd_map.get(action) is None:
             self.post_status.configure(text="Chưa tìm thấy PHP. Cài XAMPP/WAMP hoặc thêm PHP vào PATH.", text_color=C["red"])
             return
 
-        btns = [self.btn_full, self.btn_preview, self.btn_generate, self.btn_chrome]
+        if action == "chrome":
+            ok_preflight, lines = self._render_preflight(require_chrome=True)
+            if not ok_preflight:
+                self.post_status.configure(text="Chưa thể đăng: cần xử lý mục kiểm duyệt.", text_color=C["red"])
+                self._append_post_output("\n".join(["\nPRE-FLIGHT FAILED", *lines, ""]))
+                return
+
+        btns = self._workflow_buttons()
         for b in btns: b.configure(state="disabled")
         labels = {"preview": "Đang lấy tin tức...", "generate": "Đang soạn bài...", "chrome": "Đang đăng qua Chrome..."}
         self._set_progress(0.08, f"Đang xử lý: {labels.get(action)}", C["yellow"])
@@ -1549,6 +2098,18 @@ class App(ctk.CTk):
             offvalue=False,
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=C["text"],
+            fg_color=C["accent"],
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+
+        self.autopilot_safe_var = ctk.BooleanVar(value=bool(self._autopilot.get("safe_mode", True)))
+        ctk.CTkCheckBox(
+            ap,
+            text="Autopilot an toàn: kiểm tra page, Chrome, caption và ảnh trước khi đăng",
+            variable=self.autopilot_safe_var,
+            onvalue=True,
+            offvalue=False,
+            font=ctk.CTkFont(size=11),
+            text_color=C["muted"],
             fg_color=C["accent"],
         ).pack(anchor="w", padx=16, pady=(0, 10))
 
@@ -1716,6 +2277,12 @@ class App(ctk.CTk):
         self.today_timeline_box.pack(fill="x", padx=16, pady=(0,14))
         self.today_timeline_box.configure(state="disabled")
 
+        wc = self._card(p, "Lịch 7 ngày")
+        self.week_calendar_box = ctk.CTkTextbox(wc, height=190, font=ctk.CTkFont(size=12, family="Courier New"),
+                                                fg_color=C["input"], text_color=C["text"], border_width=0)
+        self.week_calendar_box.pack(fill="x", padx=16, pady=(0,14))
+        self.week_calendar_box.configure(state="disabled")
+
         jc = self._card(p, "Danh sách lịch")
         self.schedule_list_box = ctk.CTkTextbox(jc, height=230, font=ctk.CTkFont(size=12, family="Courier New"),
                                                 fg_color=C["input"], text_color=C["text"], border_width=0)
@@ -1738,6 +2305,11 @@ class App(ctk.CTk):
             "enabled": False,
             "times": ["08:00", "13:00", "20:00"],
             "max_daily_posts": 3,
+            "safe_mode": True,
+            "post_style": "tong_hop",
+            "content_template": "tin_nong",
+            "max_total_articles": 8,
+            "fetch_full_content": False,
         }
         try:
             if AUTOPILOT_FILE.exists():
@@ -1780,11 +2352,17 @@ class App(ctk.CTk):
         except:
             limit = 3
 
+        compose = self._compose_options()
         self._autopilot = {
             "enabled": bool(self.autopilot_enabled_var.get()),
+            "safe_mode": bool(self.autopilot_safe_var.get()) if hasattr(self, "autopilot_safe_var") else True,
             "times": times,
             "max_daily_posts": limit,
             "pages": parse_pages(self.autopilot_pages_entry.get()) or parse_pages(read_env().get("FB_PAGES", "")),
+            "post_style": compose.get("post_style", "tong_hop"),
+            "content_template": compose.get("content_template", "tin_nong"),
+            "max_total_articles": compose.get("max_total_articles", 8),
+            "fetch_full_content": compose.get("fetch_full_content", False),
         }
         self._save_autopilot_config()
         self._sync_autopilot_jobs()
@@ -1821,6 +2399,11 @@ class App(ctk.CTk):
                         "status": "scheduled",
                         "source": "autopilot",
                         "pages": self._autopilot.get("pages", []),
+                        "post_style": self._autopilot.get("post_style", "tong_hop"),
+                        "content_template": self._autopilot.get("content_template", "tin_nong"),
+                        "max_total_articles": int(self._autopilot.get("max_total_articles", 8) or 8),
+                        "fetch_full_content": bool(self._autopilot.get("fetch_full_content", False)),
+                        "safe_mode": bool(self._autopilot.get("safe_mode", True)),
                         "created_at": datetime.now().isoformat(timespec="seconds"),
                         "last_run_date": "",
                     })
@@ -1828,6 +2411,11 @@ class App(ctk.CTk):
                     for job in self._scheduled_jobs:
                         if job.get("source") == "autopilot" and job.get("time") == t and job.get("status") == "scheduled":
                             job["pages"] = self._autopilot.get("pages", [])
+                            job["post_style"] = self._autopilot.get("post_style", job.get("post_style", "tong_hop"))
+                            job["content_template"] = self._autopilot.get("content_template", job.get("content_template", "tin_nong"))
+                            job["max_total_articles"] = int(self._autopilot.get("max_total_articles", job.get("max_total_articles", 8)) or 8)
+                            job["fetch_full_content"] = bool(self._autopilot.get("fetch_full_content", job.get("fetch_full_content", False)))
+                            job["safe_mode"] = bool(self._autopilot.get("safe_mode", job.get("safe_mode", True)))
 
         self._sched_running = any(j.get("status") == "scheduled" for j in self._scheduled_jobs)
         self._save_schedule_jobs()
@@ -1839,8 +2427,10 @@ class App(ctk.CTk):
             times = ", ".join(self._autopilot.get("times", []))
             limit = self._autopilot.get("max_daily_posts", 3)
             page_count = len(self._autopilot.get("pages", []) or parse_pages(read_env().get("FB_PAGES", "")))
+            template = CONTENT_TEMPLATES.get(self._autopilot.get("content_template", "tin_nong"), CONTENT_TEMPLATES["tin_nong"])[0]
+            safe = "safe" if self._autopilot.get("safe_mode", True) else "fast"
             self.autopilot_status.configure(
-                text=f"Autopilot đang bật · giờ đăng: {times} · tối đa {limit} bài/ngày · {page_count} page",
+                text=f"Autopilot đang bật · giờ đăng: {times} · tối đa {limit} bài/ngày · {page_count} page · {template} · {safe}",
                 text_color=C["green"],
             )
         else:
@@ -1863,7 +2453,14 @@ class App(ctk.CTk):
                 start_date = datetime.strptime(job.get("date", now.strftime("%Y-%m-%d")), "%Y-%m-%d").date()
                 base_date = max(now.date(), start_date)
                 candidate = datetime.combine(base_date, t)
-                if candidate <= now or job.get("last_run_date") == now.strftime("%Y-%m-%d"):
+                created_at = None
+                try:
+                    created_at = datetime.fromisoformat(job.get("created_at", ""))
+                except:
+                    pass
+                if job.get("last_run_date") == now.strftime("%Y-%m-%d"):
+                    candidate += timedelta(days=1)
+                elif candidate <= now and created_at and created_at > candidate:
                     candidate += timedelta(days=1)
                 return candidate
             return datetime.strptime(f"{job.get('date')} {job.get('time')}", "%Y-%m-%d %H:%M")
@@ -1890,6 +2487,7 @@ class App(ctk.CTk):
             self.sched_status.configure(text="Ngày/giờ chưa hợp lệ hoặc đã qua", text_color=C["red"])
             return
 
+        compose = self._compose_options()
         job = {
             "id": datetime.now().strftime("%Y%m%d%H%M%S"),
             "date": date_val,
@@ -1897,6 +2495,11 @@ class App(ctk.CTk):
             "mode": self._sched_mode_var.get(),
             "action": self._sched_action_var.get(),
             "pages": pages,
+            "post_style": compose["post_style"],
+            "content_template": compose["content_template"],
+            "max_total_articles": compose["max_total_articles"],
+            "fetch_full_content": compose["fetch_full_content"],
+            "safe_mode": True,
             "status": "scheduled",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "last_run_date": "",
@@ -1926,8 +2529,9 @@ class App(ctk.CTk):
             mode = "hằng ngày" if job.get("mode") == "daily" else "một lần"
             action = "tạo+đăng" if job.get("action") == "full" else "chỉ đăng"
             source = "auto" if job.get("source") == "autopilot" else "manual"
+            style = "từng tin" if job.get("post_style") == "don_le" else "tổng hợp"
             page_count = len(job.get("pages", []) or parse_pages(read_env().get("FB_PAGES", "")))
-            lines.append(f"{job.get('status','?'):10} | {source:6} | {job.get('date','----')} {job.get('time','--:--')} | {mode:9} | {action:8} | {page_count} page")
+            lines.append(f"{job.get('status','?'):10} | {source:6} | {job.get('date','----')} {job.get('time','--:--')} | {mode:9} | {action:8} | {style:8} | {page_count} page")
         if not lines:
             lines = ["Chưa có lịch nào. Thêm lịch ở khung phía trên."]
         self.schedule_list_box.configure(state="normal")
@@ -1936,6 +2540,7 @@ class App(ctk.CTk):
         self.schedule_list_box.configure(state="disabled")
         if hasattr(self, "today_timeline_box"):
             self._render_today_timeline(self.today_timeline_box)
+        self._render_week_calendar()
 
     def _update_next_run(self):
         runs = [(self._next_job_run(job), job) for job in self._scheduled_jobs]
@@ -2032,7 +2637,12 @@ class App(ctk.CTk):
             return
 
         if action == "full":
-            cmd = php_command("preview-post")
+            cmd = self._preview_post_command({
+                "post_style": job.get("post_style", "tong_hop"),
+                "max_total_articles": int(job.get("max_total_articles", 8) or 8),
+                "fetch_full_content": bool(job.get("fetch_full_content", False)),
+                "content_template": job.get("content_template", "tin_nong"),
+            })
             if cmd:
                 commands.append(("Soạn bài", cmd))
             else:
@@ -2050,6 +2660,20 @@ class App(ctk.CTk):
             queue_entry = self._post_queue[0]
             self._write_queue_entry_to_latest(queue_entry)
             queue_entry_id = queue_entry.get("id")
+        else:
+            job["status"] = "scheduled" if job.get("mode") == "daily" else "failed"
+            job["last_result"] = "queue_empty"
+            job["last_run_at"] = datetime.now().isoformat(timespec="seconds")
+            if job.get("mode") == "daily":
+                job["last_run_date"] = datetime.now().strftime("%Y-%m-%d")
+            self._scheduler_busy = False
+            self._save_schedule_jobs()
+            self.after(0, lambda: [
+                self.sched_status.configure(text="Lịch lỗi: hàng đợi chưa có bài để đăng.", text_color=C["red"]),
+                self._render_schedule_jobs(),
+                self._update_next_run()
+            ])
+            return
         pages = job.get("pages") or parse_pages(read_env().get("FB_PAGES", ""))
         chrome_cmd = [PY, str(BASE / "chrome_poster.py")]
         if pages:
@@ -2061,6 +2685,12 @@ class App(ctk.CTk):
         for label, cmd in commands:
             output_parts.append(f"\n--- {label} ---\n")
             try:
+                if "Chrome" in label and job.get("safe_mode", True):
+                    preflight_ok, preflight_lines, _checks = self._preflight_checks(require_chrome=True, pages=pages)
+                    if not preflight_ok:
+                        output_parts.append("\n".join(["PRE-FLIGHT FAILED", *preflight_lines, ""]))
+                        ok = False
+                        break
                 env = os.environ.copy()
                 env["PYTHONIOENCODING"] = "utf-8"
                 env["PYTHONUTF8"] = "1"
@@ -2100,6 +2730,7 @@ class App(ctk.CTk):
                     text_color=C["green"] if ok else C["red"])
             self._render_schedule_jobs()
             self._update_next_run()
+            self._render_post_queue()
             self._refresh_dashboard()
         self.after(0, _done)
 
@@ -2427,6 +3058,13 @@ class App(ctk.CTk):
                 ("ARTICLE_HISTORY_DAYS", "Số ngày né tin cũ", "14"),
                 ("MAX_TOTAL_ARTICLES", "Số tin tối đa mỗi bài", "8"),
             ]),
+            ("Tùy chọn nội dung mặc định", [
+                ("POST_STYLE", "Kiểu bài mặc định", "tong_hop hoặc don_le"),
+                ("CONTENT_TEMPLATE", "Mẫu nội dung mặc định", "tin_nong"),
+                ("MAX_POSTS", "Số bài tối đa", "1"),
+                ("MAX_ARTICLES", "Số tin mỗi nguồn", "5"),
+                ("FETCH_FULL_CONTENT", "Đọc nội dung đầy đủ", "false"),
+            ]),
             ("Grok", [
                 ("GROK_API_KEY",  "API Key", "xai-..."),
                 ("GROK_MODEL",    "Model",   "grok-3-mini-fast"),
@@ -2582,6 +3220,7 @@ class App(ctk.CTk):
             self._update_next_run()
             if hasattr(self, "today_timeline_box"):
                 self._render_today_timeline(self.today_timeline_box)
+            self._render_week_calendar()
         # Cập nhật trạng thái Chrome trên trang Post
         try:
             ok = check_chrome()
@@ -2598,7 +3237,122 @@ class App(ctk.CTk):
         self.after(10000, self._refresh_loop)
 
 
+    # ════════════ NANO BANANA 2 METHODS ════════════
+
+    def _nb_generate(self):
+        """Tạo ảnh AI bằng Nano Banana 2 (Gemini) trong thread riêng."""
+        import threading
+        prompt = self.nb_prompt.get("1.0", "end").strip()
+        if not prompt:
+            self.nb_status.configure(text="⚠️ Vui lòng nhập prompt!", text_color=C["red"])
+            return
+
+        self.btn_nb_generate.configure(state="disabled", text="Đang tạo ảnh...")
+        self.nb_status.configure(text="⏳ Đang gọi Gemini API...", text_color=C["muted"])
+        self.nb_result_path.configure(text="")
+
+        def _run():
+            try:
+                from nano_banana import generate_image, _read_env_key
+            except ImportError:
+                self.after(0, lambda: self._nb_done(
+                    {"success": False, "message": "Không tìm thấy nano_banana.py"}))
+                return
+
+            result = generate_image(
+                prompt,
+                api_key=_read_env_key(),
+                model=self.nb_model_var.get(),
+                aspect=self.nb_aspect_var.get(),
+                size="1K",
+                transparent=self.nb_transparent_var.get(),
+                output_dir=str(BASE / "output"),
+                on_log=lambda msg, lvl="info": self.after(
+                    0, lambda m=msg: self.nb_status.configure(text=m, text_color=C["muted"])
+                ),
+            )
+            self.after(0, lambda r=result: self._nb_done(r))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _nb_done(self, result: dict):
+        """Xử lý kết quả sau khi tạo ảnh xong."""
+        self.btn_nb_generate.configure(state="normal", text="🍌 Tạo ảnh AI")
+        if result["success"]:
+            self.nb_status.configure(
+                text=f"✅ Tạo ảnh thành công! Model: {result['model']} · ~${result['cost_usd']:.3f}",
+                text_color=C["green"],
+            )
+            self.nb_result_path.configure(text=result["image_path"])
+
+            # Show thumbnail
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(result["image_path"])
+                img.thumbnail((160, 100))
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(160, 100))
+                self.nb_preview_lbl.configure(image=ctk_img, text="")
+                self.nb_preview_lbl._image = ctk_img
+            except Exception:
+                self.nb_preview_lbl.configure(text="✅ Ảnh đã tạo")
+
+            # Auto-attach to post if checked
+            if self.nb_auto_attach_var.get():
+                self._nb_attach_path(result["image_path"])
+
+            self._nb_refresh_costs()
+        else:
+            self.nb_status.configure(
+                text=f"❌ {result['message']}", text_color=C["red"]
+            )
+
+    def _nb_attach_path(self, path: str):
+        """Ghi image_path vào latest_post.json để chrome_poster.py tự đính kèm."""
+        try:
+            jp = BASE / "output" / "latest_post.json"
+            if jp.exists():
+                import json as _json
+                d = _json.loads(jp.read_text("utf-8"))
+                d["image_path"] = path
+                d["image_paths"] = [path]
+                jp.write_text(_json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                self.nb_status.configure(
+                    text=f"✅ Đã gắn ảnh vào bài · {path.split('/')[-1].split(chr(92))[-1]}",
+                    text_color=C["green"],
+                )
+        except Exception as e:
+            self.nb_status.configure(text=f"⚠️ Không gắn được: {e}", text_color=C["red"])
+
+    def _nb_attach_to_post(self):
+        """Nút Gắn ảnh hiện tại — gắn ảnh vừa tạo vào latest_post.json."""
+        path = self.nb_result_path.cget("text").strip()
+        if not path:
+            self.nb_status.configure(text="⚠️ Chưa có ảnh để gắn!", text_color=C["red"])
+            return
+        self._nb_attach_path(path)
+
+    def _nb_open_output_dir(self):
+        """Mở thư mục output trong Explorer."""
+        import subprocess, os
+        out = BASE / "output"
+        out.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(f'explorer "{out}"')
+
+    def _nb_refresh_costs(self):
+        """Cập nhật label chi phí Nano Banana."""
+        try:
+            from nano_banana import get_total_cost
+            info = get_total_cost()
+            self.nb_cost_lbl.configure(
+                text=f"${info['total_usd']:.4f}\n{info['total_generations']} lần tạo",
+                text_color=C["accent"],
+            )
+        except Exception:
+            self.nb_cost_lbl.configure(text="$0.0000\n0 lần tạo")
+
+
 # ════════════════════════════════════════════════
 if __name__ == "__main__":
     app = App()
     app.mainloop()
+
