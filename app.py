@@ -35,37 +35,45 @@ except ImportError:
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Aqua white brand palette. Tuple colors let CustomTkinter switch light/dark cleanly.
+# ── Bảng màu XIATA — Vibrant Harmony (Light / Dark) ──
+# Sáng: nền trắng ngà ấm, accent cam-xanh nổi bật
+# Tối: nền đen navy sâu, accent cyan điện sáng
 C = {
-    "bg":              ("#F3FCFF", "#061418"),
-    "sidebar":         ("#EAF8FB", "#071B21"),
-    "panel":           ("#FFFFFF", "#0B242B"),
-    "panel2":          ("#DFF7FB", "#11323B"),
-    "card":            ("#FFFFFF", "#0B242B"),
-    "card2":           ("#EFFBFD", "#103039"),
-    "input":           ("#F8FDFF", "#0F2A31"),
-    "border":          ("#B7E3EB", "#24505B"),
-    "text":            ("#0A2A33", "#F3FEFF"),
-    "muted":           ("#6B8790", "#A5D4DC"),
-    "subtle":          ("#7E9AA2", "#7EB0BA"),
-    "accent":          ("#1DBACC", "#41D9E6"),
-    "accent_hover":    ("#0A5D6B", "#5CE6F0"),
-    "accent2":         ("#DFF7FB", "#1E4A54"),
-    "deep":            ("#0A5D6B", "#78EEF7"),
-    "green":           ("#0D8B68", "#45C08F"),
-    "red":             ("#C83E55", "#F06F82"),
-    "yellow":          ("#9F7700", "#D8B649"),
-    "orange":          ("#B86518", "#D8954F"),
-    "blue":            ("#147A99", "#69CBE0"),
-    "ink":             ("#FFFFFF", "#062226"),
-    "violet":          ("#5367D6", "#95A9FF"),
-    "cyan":            ("#16A7B8", "#66D4DC"),
-    "log_text":        ("#145A4A", "#A8EBD8"),
-    "progress_track":  ("#D8ECEF", "#10242A"),
-    "status_done_bg":  ("#DDF5EE", "#173C33"),
-    "status_warn_bg":  ("#FFF5D6", "#3B3217"),
-    "status_error_bg": ("#FFE7EC", "#3D1822"),
-    "status_idle_bg":  ("#E8F2F4", "#152B31"),
+    # Backgrounds
+    "bg":              ("#F7F9FC", "#0D1117"),
+    "sidebar":         ("#FFFFFF", "#161B22"),
+    "panel":           ("#FFFFFF", "#1C2128"),
+    "panel2":          ("#EEF2FF", "#21262D"),
+    "card":            ("#FFFFFF", "#1C2128"),
+    "card2":           ("#F0F4FF", "#262D3A"),
+    "input":           ("#F4F7FF", "#161B22"),
+    # Borders
+    "border":          ("#D0D9F0", "#30363D"),
+    # Text
+    "text":            ("#0D1117", "#E6EDF3"),
+    "muted":           ("#5A6882", "#8B949E"),
+    "subtle":          ("#8896B0", "#6E7A8A"),
+    # Accent — Cyan-Blue nổi bật
+    "accent":          ("#2563EB", "#58A6FF"),
+    "accent_hover":    ("#1D4ED8", "#79BBFF"),
+    "accent2":         ("#EFF4FF", "#1F2D45"),
+    "deep":            ("#1E40AF", "#93C5FD"),
+    # Semantic colors
+    "green":           ("#059669", "#3FB950"),
+    "red":             ("#DC2626", "#F85149"),
+    "yellow":          ("#D97706", "#E3B341"),
+    "orange":          ("#EA580C", "#F0883E"),
+    "blue":            ("#0284C7", "#79C0FF"),
+    "ink":             ("#FFFFFF", "#0D1117"),
+    "violet":          ("#7C3AED", "#A5B4FC"),
+    "cyan":            ("#0891B2", "#22D3EE"),
+    "log_text":        ("#065F46", "#56D364"),
+    "progress_track":  ("#E2E8F0", "#21262D"),
+    # Status backgrounds
+    "status_done_bg":  ("#D1FAE5", "#1A3A2A"),
+    "status_warn_bg":  ("#FEF3C7", "#3A2E0F"),
+    "status_error_bg": ("#FEE2E2", "#3A1A1A"),
+    "status_idle_bg":  ("#EFF4FF", "#1F2D45"),
 }
 
 BASE = Path(__file__).parent
@@ -284,75 +292,88 @@ class App(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         # Sidebar
-        self.sidebar = ctk.CTkFrame(self, width=272, corner_radius=0, fg_color=C["sidebar"])
+        self.sidebar = ctk.CTkFrame(self, width=280, corner_radius=0, fg_color=C["sidebar"])
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
-        # Logo chữ tối giản theo nhận diện XIATA POST OPS.
         self._logo_img = None
 
-        brand = ctk.CTkFrame(self.sidebar, fg_color=C["panel"], corner_radius=12,
+        # ── Brand block ──
+        brand = ctk.CTkFrame(self.sidebar, fg_color=C["accent2"], corner_radius=14,
                              border_width=1, border_color=C["border"])
-        brand.pack(fill="x", padx=14, pady=(18, 14))
+        brand.pack(fill="x", padx=12, pady=(16, 12))
         brand_top = ctk.CTkFrame(brand, fg_color="transparent")
         brand_top.pack(fill="x", padx=12, pady=(12, 8))
-        if self._logo_img:
-            ctk.CTkLabel(brand_top, image=self._logo_img, text="").pack(side="left", padx=(0, 10))
-        else:
-            ctk.CTkLabel(brand_top, text="XI", width=58, height=58,
-                         font=ctk.CTkFont(size=20, weight="bold"),
-                         fg_color=C["accent"], text_color=C["ink"], corner_radius=12).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(brand_top, text="⚡", width=52, height=52,
+                     font=ctk.CTkFont(size=22, weight="bold"),
+                     fg_color=C["accent"], text_color=C["ink"],
+                     corner_radius=13).pack(side="left", padx=(0, 10))
         title_box = ctk.CTkFrame(brand_top, fg_color="transparent")
         title_box.pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(title_box, text="XIATA POST OPS",
-                     font=ctk.CTkFont(size=15, weight="bold"), text_color=C["text"]).pack(anchor="w")
-        ctk.CTkLabel(title_box, text=f"Publishing suite · {VERSION}",
-                     font=ctk.CTkFont(size=10), text_color=C["subtle"]).pack(anchor="w", pady=(2, 0))
-        ctk.CTkFrame(brand, height=2, fg_color=C["accent"], corner_radius=8).pack(fill="x", padx=12, pady=(0, 10))
-        ctk.CTkLabel(brand, text="Content operations · Chrome",
-                     font=ctk.CTkFont(size=10), text_color=C["muted"]).pack(anchor="w", padx=12, pady=(0, 12))
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color=C["text"]).pack(anchor="w")
+        ctk.CTkLabel(title_box, text=f"Publishing Suite  ·  {VERSION}",
+                     font=ctk.CTkFont(size=10),
+                     text_color=C["muted"]).pack(anchor="w", pady=(2, 0))
+        # Accent divider
+        div = ctk.CTkFrame(brand, height=3, fg_color=C["accent"], corner_radius=6)
+        div.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkLabel(brand, text="🔵  Content · Chrome · AI",
+                     font=ctk.CTkFont(size=10),
+                     text_color=C["muted"]).pack(anchor="w", padx=14, pady=(0, 10))
 
-        ctk.CTkLabel(self.sidebar, text="WORKSPACE", font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=C["subtle"]).pack(anchor="w", padx=22, pady=(0,8))
+        # ── Nav section label ──
+        ctk.CTkLabel(self.sidebar, text="  MENU",
+                     font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["subtle"]).pack(anchor="w", padx=14, pady=(4, 6))
 
         self.nav_buttons = {}
         menus = [
-            ("dashboard",  "01  Tổng quan"),
-            ("post",       "02  Tạo bài & đăng"),
-            ("schedule",   "03  Lịch xuất bản"),
-            ("chat",       "04  Trợ lý nội dung"),
-            ("settings",   "05  Cấu hình"),
-            ("logs",       "06  Nhật ký"),
+            ("dashboard", "🏠", "Tổng quan"),
+            ("post",      "✏️", "Tạo bài & Đăng"),
+            ("schedule",  "📅", "Lịch xuất bản"),
+            ("chat",      "💬", "Trợ lý AI"),
+            ("settings",  "⚙️", "Cấu hình"),
+            ("logs",      "📋", "Nhật ký"),
         ]
-        for key, label in menus:
+        for key, icon, label in menus:
             btn = ctk.CTkButton(
-                self.sidebar, text=label, anchor="w",
-                font=ctk.CTkFont(size=13, weight="bold"),
-                fg_color="transparent", hover_color=C["panel2"],
-                text_color=C["muted"], height=42, corner_radius=9,
-                border_width=0, border_color=C["border"],
+                self.sidebar,
+                text=f"  {icon}  {label}",
+                anchor="w",
+                font=ctk.CTkFont(size=13),
+                fg_color="transparent",
+                hover_color=C["panel2"],
+                text_color=C["muted"],
+                height=44,
+                corner_radius=10,
+                border_width=0,
+                border_color=C["border"],
                 command=lambda k=key: self._show_page(k)
             )
             try:
                 btn.configure(cursor="hand2")
             except:
                 pass
-            btn.pack(fill="x", padx=10, pady=1)
+            btn.pack(fill="x", padx=10, pady=2)
             self.nav_buttons[key] = btn
 
         # Nút chuyển sáng/tối
         self.sidebar.pack_propagate(False)
         self.btn_theme = self._button(
-            self.sidebar, "", variant="outline", height=34,
-            font_size=11, command=self._toggle_theme
+            self.sidebar, "🌙  Chế độ sáng" if self._is_dark else "☀️  Chế độ tối",
+            variant="outline", height=36, font_size=11,
+            command=self._toggle_theme
         )
-        self.btn_theme.configure(text="Chế độ sáng" if self._is_dark else "Chế độ tối")
-        self.btn_theme.pack(side="bottom", fill="x", padx=14, pady=(0, 4))
+        self.btn_theme.pack(side="bottom", fill="x", padx=12, pady=(0, 6))
 
         # Trạng thái Chrome ở dưới sidebar
-        self.chrome_label = ctk.CTkLabel(self.sidebar, text="Chrome: offline",
-                                          font=ctk.CTkFont(size=11), text_color=C["subtle"])
-        self.chrome_label.pack(side="bottom", pady=(4, 8), padx=14)
+        self.chrome_label = ctk.CTkLabel(
+            self.sidebar, text="⚪  Chrome: offline",
+            font=ctk.CTkFont(size=11), text_color=C["subtle"]
+        )
+        self.chrome_label.pack(side="bottom", pady=(4, 2), padx=14)
 
         # Content area
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=C["bg"])
@@ -386,12 +407,24 @@ class App(ctk.CTk):
         self.pages[key].grid()
         self.current_page = key
 
-        # Highlight nav button
+        # Highlight nav button — pill style
+        icons = {"dashboard": "🏠", "post": "✏️", "schedule": "📅",
+                 "chat": "💬", "settings": "⚙️", "logs": "📋"}
+        labels_map = {"dashboard": "Tổng quan", "post": "Tạo bài & Đăng",
+                      "schedule": "Lịch xuất bản", "chat": "Trợ lý AI",
+                      "settings": "Cấu hình", "logs": "Nhật ký"}
         for k, btn in self.nav_buttons.items():
-            btn.configure(fg_color=C["card2"] if k == key else "transparent",
-                          text_color=C["accent"] if k == key else C["muted"],
-                          border_width=1 if k == key else 0,
-                          border_color=C["accent"] if k == key else C["border"])
+            active = k == key
+            icon = icons.get(k, "")
+            lbl  = labels_map.get(k, k)
+            btn.configure(
+                text=f"  {icon}  {lbl}",
+                fg_color=C["accent2"] if active else "transparent",
+                text_color=C["accent"] if active else C["muted"],
+                font=ctk.CTkFont(size=13, weight="bold" if active else "normal"),
+                border_width=1 if active else 0,
+                border_color=C["accent"] if active else C["border"]
+            )
 
     def _button(self, parent, text, variant="secondary", width=120, height=36,
                 command=None, font_size=12, bold=False, **kwargs):
@@ -539,32 +572,48 @@ class App(ctk.CTk):
         self._is_dark = not self._is_dark
         if self._is_dark:
             ctk.set_appearance_mode("dark")
-            self.btn_theme.configure(text="Chế độ sáng")
+            self.btn_theme.configure(text="🌙  Chế độ sáng")
             write_ui_state({"theme": "dark"})
         else:
             ctk.set_appearance_mode("light")
-            self.btn_theme.configure(text="Chế độ tối")
+            self.btn_theme.configure(text="☀️  Chế độ tối")
             write_ui_state({"theme": "light"})
 
     # ─── Card helper ───
-    def _card(self, parent, title="", pady=(0,12)):
-        f = ctk.CTkFrame(parent, corner_radius=10, fg_color=C["card"],
+    def _card(self, parent, title="", pady=(0,14)):
+        f = ctk.CTkFrame(parent, corner_radius=14, fg_color=C["card"],
                          border_width=1, border_color=C["border"])
         f.pack(fill="x", padx=20, pady=pady)
         if title:
-            ctk.CTkLabel(f, text=title.upper(), font=ctk.CTkFont(size=10, weight="bold"),
-                         text_color=C["muted"]).pack(anchor="w", padx=18, pady=(16,6))
+            hdr = ctk.CTkFrame(f, fg_color="transparent")
+            hdr.pack(fill="x", padx=16, pady=(14, 0))
+            # Accent dot
+            ctk.CTkFrame(hdr, width=4, height=16, fg_color=C["accent"],
+                         corner_radius=3).pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(hdr, text=title.upper(),
+                         font=ctk.CTkFont(size=10, weight="bold"),
+                         text_color=C["muted"]).pack(side="left", anchor="w")
+            ctk.CTkFrame(f, height=1, fg_color=C["border"]).pack(fill="x", padx=16, pady=(8, 0))
         return f
 
     def _page_title(self, parent, kicker, title, subtitle):
         wrap = ctk.CTkFrame(parent, fg_color="transparent")
-        wrap.pack(fill="x", padx=24, pady=(24, 16))
-        ctk.CTkLabel(wrap, text=kicker.upper(), font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=C["accent"]).pack(anchor="w")
-        ctk.CTkLabel(wrap, text=title, font=ctk.CTkFont(size=30, weight="bold"),
-                     text_color=C["text"]).pack(anchor="w", pady=(2, 2))
-        ctk.CTkLabel(wrap, text=subtitle, font=ctk.CTkFont(size=12),
-                     text_color=C["muted"], justify="left").pack(anchor="w")
+        wrap.pack(fill="x", padx=24, pady=(24, 12))
+        # Kicker pill
+        pill = ctk.CTkFrame(wrap, fg_color=C["accent2"], corner_radius=20)
+        pill.pack(anchor="w", pady=(0, 8))
+        ctk.CTkLabel(pill, text=f"  {kicker.upper()}  ",
+                     font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=C["accent"]).pack(padx=4, pady=2)
+        ctk.CTkLabel(wrap, text=title,
+                     font=ctk.CTkFont(size=28, weight="bold"),
+                     text_color=C["text"]).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(wrap, text=subtitle,
+                     font=ctk.CTkFont(size=12),
+                     text_color=C["muted"], justify="left",
+                     wraplength=780).pack(anchor="w")
+        # Bottom rule
+        ctk.CTkFrame(wrap, height=1, fg_color=C["border"]).pack(fill="x", pady=(10, 0))
         return wrap
 
     # ════════════ DASHBOARD ════════════
@@ -657,7 +706,7 @@ class App(ctk.CTk):
                 text="OK" if ok else "Offline",
                 text_color=C["green"] if ok else C["red"])
         self.chrome_label.configure(
-            text=f"Chrome: {'OK' if ok else 'offline'}",
+            text=f"{'🟢' if ok else '🔴'}  Chrome: {'OK' if ok else 'offline'}",
             text_color=C["green"] if ok else C["red"]
         )
 
