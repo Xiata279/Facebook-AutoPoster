@@ -76,6 +76,7 @@ class FootballAutoWorkflow {
 
             // Bài đăng
             'post_style' => 'tong_hop', // tong_hop = tổng hợp nhiều tin, don_le = 1 tin 1 bài
+            'content_template' => 'tin_nong',
             'max_posts' => 3,           // Số bài đăng tối đa mỗi lần chạy
             'generate_image' => false,   // Có tạo ảnh AI không
 
@@ -270,17 +271,27 @@ class FootballAutoWorkflow {
             }
 
             $facebook_post = $post_result['text'];
-            $this->saveOutput("post_{$count}", $facebook_post);
+            $image_paths = $this->downloadArticleImages([$article], 1);
+            $image_path = $image_paths[0] ?? null;
 
             // Tạo ảnh
-            $image_path = null;
             if ($this->config['generate_image']) {
                 $img_prompt = "A dynamic football news illustration: {$article['title']}. Professional sports photography style, vibrant stadium atmosphere, 4K quality, dramatic lighting";
                 $image_result = $this->generateImage($img_prompt);
                 if ($image_result['success']) {
                     $image_path = $image_result['image_path'];
+                    $image_paths = [$image_path];
                 }
             }
+
+            $this->saveOutput(
+                "post_{$count}",
+                $facebook_post,
+                $image_path,
+                [$article],
+                $post_result['provider'] ?? 'unknown',
+                $image_paths
+            );
 
             // Đăng lên Facebook
             if (!empty($this->config['page_id']) && !empty($this->config['page_access_token'])) {
@@ -581,7 +592,21 @@ class FootballAutoWorkflow {
     /**
      * Prompt tóm tắt & tạo bài đăng tổng hợp
      */
+    private function contentTemplateInstruction() {
+        $template = $this->config['content_template'] ?? 'tin_nong';
+        $map = [
+            'tin_nong' => '- Phong cách: tin nóng, mở đầu mạnh, cập nhật nhanh, ưu tiên dữ kiện mới nhất.',
+            'nhan_dinh' => '- Phong cách: nhận định, có góc nhìn chuyên môn, nêu bối cảnh và tác động.',
+            'tranh_luan' => '- Phong cách: tranh luận, đặt câu hỏi mở, khơi ý kiến trái chiều nhưng không giật tít quá đà.',
+            'chuyen_nhuong' => '- Phong cách: chuyển nhượng, nhấn khả năng xảy ra, tác động đội hình và kỳ vọng.',
+            'lich_thi_dau' => '- Phong cách: lịch thi đấu, rõ thời gian, đối thủ, điểm đáng xem và lời mời dự đoán.',
+            'sau_tran' => '- Phong cách: sau trận, tóm điểm nhấn, nhân vật nổi bật và cảm xúc sau trận.',
+        ];
+        return $map[$template] ?? $map['tin_nong'];
+    }
+
     private function buildSummaryPrompt($compiled_content) {
+        $style_instruction = $this->contentTemplateInstruction();
         return "Bạn là một chuyên gia content bóng đá chuyên viết bài đăng Fanpage Facebook có khả năng tạo tương tác cao.
 
 Dưới đây là nội dung tin tức bóng đá hôm nay:
@@ -591,6 +616,8 @@ Dưới đây là nội dung tin tức bóng đá hôm nay:
 --- HẾT NỘI DUNG ---
 
 Hãy thực hiện:
+
+{$style_instruction}
 
 1. **Tóm tắt** các tin tức quan trọng nhất (chọn 3-5 tin nổi bật nhất)
 2. **Viết bài đăng Facebook** bằng tiếng Việt theo format sau:
@@ -612,6 +639,7 @@ Yêu cầu quan trọng:
      * Prompt cho bài cập nhật hằng ngày từ link người dùng gửi.
      */
     private function buildDailyLinksPrompt($compiled_content) {
+        $style_instruction = $this->contentTemplateInstruction();
         return "Bạn là biên tập viên fanpage bóng đá. Người dùng đã gửi các link bài viết để tạo một bài cập nhật hằng ngày.
 
 --- DỮ LIỆU TỪ LINK ---
@@ -619,6 +647,7 @@ Yêu cầu quan trọng:
 --- HẾT DỮ LIỆU ---
 
 Hãy viết MỘT bài đăng Facebook tiếng Việt theo phong cách cập nhật trong ngày:
+{$style_instruction}
 - Mở đầu bằng hook ngắn, đúng trọng tâm, có ngày hôm nay nếu phù hợp
 - Gom các tin thành 3-5 gạch đầu dòng rõ ràng, mỗi tin 1-2 câu
 - Chỉ dùng thông tin có trong dữ liệu, không bịa thêm chi tiết
@@ -635,12 +664,14 @@ Lưu ý: app sẽ tự đính kèm ảnh lấy từ link bài viết, nên capti
      * Prompt tạo bài đăng cho một tin đơn lẻ
      */
     private function buildSinglePostPrompt($title, $content) {
+        $style_instruction = $this->contentTemplateInstruction();
         return "Bạn là chuyên gia content bóng đá. Viết bài đăng Facebook từ tin tức sau:
 
 Tiêu đề: {$title}
 Nội dung: {$content}
 
 Yêu cầu:
+{$style_instruction}
 - Viết bài đăng Facebook tiếng Việt, tự nhiên, có cảm xúc
 - Dài khoảng 100-180 từ
 - Sử dụng emoji hợp lý
@@ -1302,16 +1333,32 @@ Yêu cầu:
                 'image_paths' => [],
             ];
         }
-        $compiled = $this->scraper->compileNewsContent($articles, $this->config['fetch_full_content']);
-        $prompt = $this->hasManualLinks()
-            ? $this->buildDailyLinksPrompt($compiled)
-            : $this->buildSummaryPrompt($compiled);
+        $used_articles = $articles;
+        if (($this->config['post_style'] ?? 'tong_hop') === 'don_le') {
+            $article = $articles[0];
+            $used_articles = [$article];
+            $content = !empty($article['description']) ? $article['description'] : ($article['title'] ?? '');
+            if (!empty($this->config['fetch_full_content']) && !empty($article['link'])) {
+                $full = $this->scraper->fetchArticleContent($article['link']);
+                if (!empty($full)) {
+                    $content = $full;
+                }
+            }
+            $prompt = $this->buildSinglePostPrompt($article['title'] ?? '', $content);
+        } else {
+            $compiled = $this->scraper->compileNewsContent($articles, $this->config['fetch_full_content']);
+            $prompt = $this->hasManualLinks()
+                ? $this->buildDailyLinksPrompt($compiled)
+                : $this->buildSummaryPrompt($compiled);
+        }
+
         $result = $this->callAI($prompt);
-        $image_paths = $result['success'] ? $this->downloadArticleImages($articles) : [];
+        $image_paths = $result['success'] ? $this->downloadArticleImages($used_articles) : [];
         $image_path = $image_paths[0] ?? null;
 
         if ($result['success']) {
-            $this->saveOutput('summary_post', $result['text'], $image_path, $articles, $result['provider'] ?? 'unknown', $image_paths);
+            $name = (($this->config['post_style'] ?? 'tong_hop') === 'don_le') ? 'single_post' : 'summary_post';
+            $this->saveOutput($name, $result['text'], $image_path, $used_articles, $result['provider'] ?? 'unknown', $image_paths);
         }
 
         return [

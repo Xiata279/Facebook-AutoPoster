@@ -79,6 +79,7 @@ C = {
 BASE = Path(__file__).parent
 PY   = sys.executable
 ARTICLE_LINKS_FILE = BASE / "input" / "article_links.txt"
+ARTICLE_HISTORY_FILE = BASE / "cache" / "article_history.json"
 SCHEDULE_FILE = BASE / "input" / "scheduled_posts.json"
 UI_STATE_FILE = BASE / "input" / "ui_state.json"
 AUTOPILOT_FILE = BASE / "input" / "autopilot.json"
@@ -3102,6 +3103,16 @@ class App(ctk.CTk):
                     text_color=C["subtle"],
                     justify="left",
                 ).pack(anchor="w", padx=16, pady=(6, 8))
+                dedupe_tools = ctk.CTkFrame(card, fg_color="transparent")
+                dedupe_tools.pack(fill="x", padx=16, pady=(0, 8))
+                self._button(
+                    dedupe_tools, "Xóa lịch sử tin đã dùng", variant="outline",
+                    width=170, height=30, command=self._clear_article_history,
+                ).pack(side="left")
+                self.dedupe_status = ctk.CTkLabel(
+                    dedupe_tools, text="", font=ctk.CTkFont(size=11), text_color=C["muted"]
+                )
+                self.dedupe_status.pack(side="left", padx=10)
             for key, label, placeholder in fields:
                 ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=12),
                              text_color=C["muted"]).pack(anchor="w", padx=16, pady=(6,2))
@@ -3134,6 +3145,17 @@ class App(ctk.CTk):
             p, "Lưu cấu hình", variant="primary", width=150, height=40,
             font_size=13, bold=True, command=self._save_settings,
         ).pack(anchor="w", padx=20, pady=(8,24))
+
+    def _clear_article_history(self):
+        try:
+            ARTICLE_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            ARTICLE_HISTORY_FILE.write_text("[]", "utf-8")
+            if hasattr(self, "dedupe_status"):
+                self.dedupe_status.configure(text="Đã xóa bộ nhớ trùng.", text_color=C["green"])
+                self.after(3000, lambda: self.dedupe_status.configure(text=""))
+        except Exception as e:
+            if hasattr(self, "dedupe_status"):
+                self.dedupe_status.configure(text=f"Không xóa được: {e}", text_color=C["red"])
 
     def _save_settings(self):
         env = {}
@@ -3355,4 +3377,3 @@ class App(ctk.CTk):
 if __name__ == "__main__":
     app = App()
     app.mainloop()
-

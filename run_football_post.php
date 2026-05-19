@@ -26,6 +26,55 @@ if (file_exists($env_file)) {
     echo "   Sao chép .env.example thành .env và điền thông tin vào\n\n";
 }
 
+function xiata_cli_options($argv) {
+    $opts = ['mode' => 'run'];
+    $mode_set = false;
+    for ($i = 1; $i < count($argv); $i++) {
+        $arg = $argv[$i];
+        if (substr($arg, 0, 2) === '--') {
+            $pair = substr($arg, 2);
+            $eq = strpos($pair, '=');
+            if ($eq !== false) {
+                $key = substr($pair, 0, $eq);
+                $value = substr($pair, $eq + 1);
+            } else {
+                $key = $pair;
+                $value = true;
+                if (isset($argv[$i + 1]) && substr($argv[$i + 1], 0, 2) !== '--') {
+                    $value = $argv[++$i];
+                }
+            }
+            $opts[str_replace('-', '_', trim($key))] = $value;
+        } elseif (!$mode_set) {
+            $opts['mode'] = $arg;
+            $mode_set = true;
+        }
+    }
+    return $opts;
+}
+
+function xiata_bool($value, $default = false) {
+    if ($value === null || $value === '') return $default;
+    if (is_bool($value)) return $value;
+    $value = strtolower(trim((string)$value));
+    return in_array($value, ['1', 'true', 'yes', 'on'], true);
+}
+
+function xiata_int($value, $default, $min, $max) {
+    if ($value === null || $value === '' || !is_numeric($value)) return $default;
+    return max($min, min($max, (int)$value));
+}
+
+$cli = xiata_cli_options($argv);
+$post_style = $cli['post_style'] ?? ($env['POST_STYLE'] ?? 'tong_hop');
+if (!in_array($post_style, ['tong_hop', 'don_le'], true)) {
+    $post_style = 'tong_hop';
+}
+$content_template = $cli['content_template'] ?? ($env['CONTENT_TEMPLATE'] ?? 'tin_nong');
+if (!in_array($content_template, ['tin_nong', 'nhan_dinh', 'tranh_luan', 'chuyen_nhuong', 'lich_thi_dau', 'sau_tran'], true)) {
+    $content_template = 'tin_nong';
+}
+
 $config = [
     // ─── Facebook Credentials ───
     'page_id'            => $env['FB_PAGE_ID'] ?? '',
@@ -52,18 +101,19 @@ $config = [
     'gemini_model'       => $env['GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite',
 
     // ─── Cấu hình Thu thập tin ───
-    'max_articles'       => 5,
+    'max_articles'       => xiata_int($cli['max_articles'] ?? ($env['MAX_ARTICLES'] ?? null), 5, 1, 30),
     'date_filter'        => 'both',
-    'fetch_full_content' => false,
+    'fetch_full_content' => xiata_bool($cli['full_content'] ?? ($env['FETCH_FULL_CONTENT'] ?? null), false),
     'article_links_file' => __DIR__ . '/input/article_links.txt',
     'avoid_recent_duplicates' => !isset($env['AVOID_RECENT_DUPLICATES']) || strtolower(trim((string)$env['AVOID_RECENT_DUPLICATES'])) !== 'false',
     'article_history_file' => __DIR__ . '/cache/article_history.json',
     'article_history_days' => (int)($env['ARTICLE_HISTORY_DAYS'] ?? 14),
-    'max_total_articles' => (int)($env['MAX_TOTAL_ARTICLES'] ?? 8),
+    'max_total_articles' => xiata_int($cli['max_total_articles'] ?? ($env['MAX_TOTAL_ARTICLES'] ?? null), 8, 1, 30),
 
     // ─── Cấu hình Bài đăng ───
-    'post_style'         => 'tong_hop',
-    'max_posts'          => 1,
+    'post_style'         => $post_style,
+    'content_template'   => $content_template,
+    'max_posts'          => xiata_int($cli['max_posts'] ?? ($env['MAX_POSTS'] ?? null), 1, 1, 8),
     // Bật tạo ảnh nếu có Gemini key
     'generate_image'     => false,
 
@@ -84,8 +134,9 @@ foreach (['images', 'logs', 'cache', 'output', 'input'] as $dir) {
 //  CHẠY
 // ═══════════════════════════════════════════════════════
 
-$mode = $argv[1] ?? 'run';
+$mode = $cli['mode'] ?? 'run';
 $workflow = new FootballAutoWorkflow($config);
+$exit_code = 0;
 
 echo "\n";
 echo "╔══════════════════════════════════════════════════╗\n";
@@ -101,6 +152,9 @@ switch ($mode) {
         echo "─────────────────────────────────\n\n";
 
         $preview = $workflow->previewNews();
+        if (empty($preview['articles'])) {
+            $exit_code = 1;
+        }
         echo "Tổng số tin: " . count($preview['articles']) . "\n\n";
 
         foreach ($preview['articles'] as $i => $article) {
@@ -124,6 +178,9 @@ switch ($mode) {
         echo "─────────────────────────────────\n\n";
 
         $preview = $workflow->previewPost();
+        if (($preview['status'] ?? '') !== 'success') {
+            $exit_code = 1;
+        }
 
         echo "📰 Số tin đã thu thập: {$preview['articles_count']}\n";
         echo "Trạng thái: {$preview['status']}\n";
@@ -156,7 +213,7 @@ switch ($mode) {
                 echo "🖼️ Ảnh đính kèm: {$preview['image_path']}\n";
             }
         }
-        echo "\n💡 Bước tiếp theo: python chrome_poster.py\n";
+        echo $exit_code === 0 ? "\n💡 Bước tiếp theo: python chrome_poster.py\n" : "\n💡 Hãy thêm link mới hoặc xóa bộ nhớ trùng trước khi đăng.\n";
         break;
 
     // ─── Chạy đầy đủ (thu thập + tạo bài + tạo ảnh + đăng) ───
@@ -166,6 +223,9 @@ switch ($mode) {
         echo "─────────────────────────────────\n\n";
 
         $result = $workflow->run();
+        if (($result['status'] ?? '') !== 'success') {
+            $exit_code = 1;
+        }
 
         echo "\n═══ KẾT QUẢ ═══\n";
         echo "Trạng thái: " . strtoupper($result['status']) . "\n";
@@ -186,6 +246,8 @@ switch ($mode) {
         break;
 }
 
-echo "\n✅ Hoàn thành!\n";
+echo $exit_code === 0 ? "\n✅ Hoàn thành!\n" : "\n❌ Có lỗi, vui lòng xem log phía trên.\n";
+
+exit($exit_code);
 
 ?>
