@@ -275,6 +275,82 @@ class FacebookPoster:
         except:
             return False
 
+    def _page_switch_prompt_visible(self) -> bool:
+        try:
+            return bool(self.driver.execute_script("""
+                const text = (document.body.innerText || '').toLowerCase();
+                return text.includes('chuyển sang trang') ||
+                       text.includes('switch into page') ||
+                       text.includes('switch to page') ||
+                       text.includes('switch to your page');
+            """))
+        except:
+            return False
+
+    def _click_page_switch_button(self) -> bool:
+        try:
+            return bool(self.driver.execute_script("""
+                const buttonLabels = [
+                    'chuyển',
+                    'chuyển ngay',
+                    'switch',
+                    'switch now',
+                    'switch into page',
+                    'switch to page'
+                ];
+                const contextWords = [
+                    'chuyển sang trang',
+                    'switch into page',
+                    'switch to page',
+                    'switch to your page'
+                ];
+                const nodes = Array.from(document.querySelectorAll(
+                    'div[role="button"], button, a[role="button"]'
+                ));
+
+                function visible(el) {
+                    const r = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 &&
+                           style.visibility !== 'hidden' &&
+                           style.display !== 'none' &&
+                           Number(style.opacity || '1') > 0.35;
+                }
+
+                function textOf(el) {
+                    return ((el.innerText || el.textContent || '') + ' ' +
+                            (el.getAttribute('aria-label') || '')).trim().toLowerCase();
+                }
+
+                function contextOf(el) {
+                    let cur = el;
+                    const parts = [];
+                    for (let i = 0; i < 6 && cur; i++, cur = cur.parentElement) {
+                        parts.push((cur.innerText || cur.textContent || '').toLowerCase());
+                    }
+                    return parts.join(' ');
+                }
+
+                const candidates = [];
+                for (const el of nodes) {
+                    if (!visible(el)) continue;
+                    const label = textOf(el);
+                    if (!buttonLabels.some(x => label === x || label.includes(x))) continue;
+                    const context = contextOf(el);
+                    if (contextWords.some(x => context.includes(x))) {
+                        candidates.push(el);
+                    }
+                }
+
+                if (!candidates.length) return false;
+                const el = candidates[0];
+                el.scrollIntoView({block: 'center', inline: 'center'});
+                el.click();
+                return true;
+            """))
+        except:
+            return False
+
     def _click_dialog_button_by_label(self, labels) -> bool:
         try:
             dialog = self.composer_dialog or self._composer_dialog()
@@ -349,6 +425,9 @@ class FacebookPoster:
     def open_composer(self) -> bool:
         log("🔍 Tìm ô soạn bài...")
         time.sleep(0.7)
+        if self._page_switch_prompt_visible():
+            log("❌ Page chưa chuyển sang đúng chế độ quản lý. Dừng để tránh nhập vào ô bình luận.", "error")
+            return False
 
         js_button_groups = [
             ["Bạn đang nghĩ gì", "What's on your mind", "Tạo bài viết", "Create a post", "Create post"],
@@ -622,14 +701,37 @@ class FacebookPoster:
         return True
 
     # ── 5. Chuyển sang chế độ Fanpage ──
-    def switch_to_page_mode(self) -> bool:
-        """Click 'Chuyển ngay' để đăng bài với tư cách Fanpage, không phải cá nhân."""
-        if self._click_visible_button_by_label(["Chuyển ngay", "Switch now"]):
-            time.sleep(random.uniform(0.9, 1.4))
-            log("✅ Đã chuyển sang chế độ quản lý Trang (Fanpage)", "ok")
+    def switch_to_page_mode(self, slug: str = "") -> bool:
+        """Đảm bảo đang thao tác với tư cách Page trước khi mở composer."""
+        if not self._page_switch_prompt_visible():
+            log("ℹ Đã ở chế độ trang hoặc không cần chuyển", "info")
             return True
-        log("ℹ Đã ở chế độ trang hoặc không cần chuyển", "info")
-        return True
+
+        log("🔁 Facebook đang yêu cầu chuyển sang Page, tiến hành bấm Chuyển...", "info")
+        clicked = self._click_page_switch_button()
+        if not clicked:
+            clicked = self._click_visible_button_by_label([
+                "Chuyển ngay",
+                "Chuyển",
+                "Switch now",
+                "Switch",
+                "Switch into Page",
+                "Switch to Page",
+            ])
+
+        if not clicked:
+            log("❌ Không bấm được nút Chuyển sang Page. Dừng để tránh đăng nhầm/bình luận nhầm.", "error")
+            return False
+
+        for _ in range(16):
+            time.sleep(0.5)
+            if not self._page_switch_prompt_visible():
+                log("✅ Đã chuyển sang chế độ quản lý Trang (Fanpage)", "ok")
+                time.sleep(random.uniform(0.8, 1.2))
+                return True
+
+        log("❌ Facebook vẫn chưa chuyển sang Page. Dừng để tránh thao tác nhầm vào ô bình luận.", "error")
+        return False
 
     # ── 6. Upload ảnh vào composer ──
     def upload_image(self, image_path) -> bool:
@@ -709,7 +811,8 @@ class FacebookPoster:
             return False
 
         # QUAN TRỌNG: Chuyển sang chế độ Fanpage trước khi đăng
-        self.switch_to_page_mode()
+        if not self.switch_to_page_mode(slug):
+            return False
 
         if not self.open_composer():
             return False

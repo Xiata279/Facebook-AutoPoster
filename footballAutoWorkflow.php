@@ -79,6 +79,9 @@ class FootballAutoWorkflow {
             'content_template' => 'tin_nong',
             'max_posts' => 3,           // Số bài đăng tối đa mỗi lần chạy
             'generate_image' => false,   // Có tạo ảnh AI không
+            'no_logo_images' => true,
+            'min_post_image_width' => 420,
+            'min_post_image_height' => 220,
 
             // Thư mục
             'image_folder' => './images/',
@@ -276,7 +279,7 @@ class FootballAutoWorkflow {
 
             // Tạo ảnh
             if ($this->config['generate_image']) {
-                $img_prompt = "A dynamic football news illustration: {$article['title']}. Professional sports photography style, vibrant stadium atmosphere, 4K quality, dramatic lighting";
+                $img_prompt = "A dynamic football news illustration: {$article['title']}. Professional sports photography style, vibrant stadium atmosphere, 4K quality, dramatic lighting, no logo, no watermark, no text overlay";
                 $image_result = $this->generateImage($img_prompt);
                 if ($image_result['success']) {
                     $image_path = $image_result['image_path'];
@@ -505,24 +508,51 @@ class FootballAutoWorkflow {
     private function downloadArticleImages($articles, $limit = 4) {
         $paths = [];
         $seen = [];
+        $clean_only = !empty($this->config['no_logo_images']);
 
         foreach ($articles as $article) {
+            $candidates = [];
             $image_url = trim($article['image'] ?? '');
-            if (!$image_url || !preg_match('/^https?:\/\//i', $image_url)) {
-                continue;
+            if ($image_url) {
+                $candidates[] = $image_url;
             }
-            if (isset($seen[$image_url])) {
-                continue;
+            if (($clean_only || !$image_url) && !empty($article['link'])) {
+                $this->log("Đang bổ sung ảnh từ trang bài viết: {$article['link']}");
+                $enriched = $this->scraper->fetchArticleFromUrl($article['link']);
+                $enriched_image = trim($enriched['image'] ?? '');
+                if ($enriched_image) {
+                    $candidates[] = $enriched_image;
+                }
             }
-            $seen[$image_url] = true;
 
-            $this->log("🖼️ Đang lấy ảnh từ bài viết: {$image_url}");
-            $path = $this->downloadImageFile($image_url, $article['link'] ?? '');
-            if ($path) {
+            foreach (array_values(array_unique($candidates)) as $image_url) {
+                if (!$image_url || !preg_match('/^https?:\/\//i', $image_url)) {
+                    continue;
+                }
+                if ($clean_only && $this->imageUrlLooksLogoLike($image_url)) {
+                    $this->log("Bỏ qua ảnh nghi là logo/watermark: {$image_url}");
+                    continue;
+                }
+                if (isset($seen[$image_url])) {
+                    continue;
+                }
+                $seen[$image_url] = true;
+
+                $this->log("🖼️ Đang lấy ảnh từ bài viết: {$image_url}");
+                $path = $this->downloadImageFile($image_url, $article['link'] ?? '');
+                if (!$path) {
+                    continue;
+                }
+                if ($clean_only && !$this->imageFileLooksCleanForPost($path, $reason)) {
+                    @unlink($path);
+                    $this->log("Bỏ qua ảnh chưa đạt chuẩn không-logo ({$reason})");
+                    continue;
+                }
+
                 $this->log("✅ Đã lưu ảnh bài viết: " . basename($path));
                 $paths[] = $path;
                 if (count($paths) >= $limit) {
-                    break;
+                    break 2;
                 }
             }
         }
@@ -570,6 +600,48 @@ class FootballAutoWorkflow {
             $this->log("⚠️ Lỗi tải ảnh bài viết: " . $e->getMessage());
             return null;
         }
+    }
+
+    private function imageUrlLooksLogoLike($url) {
+        $url = strtolower((string)$url);
+        return preg_match('/(logo|watermark|wm-|avatar|icon|sprite|favicon|badge|brand|placeholder|loading)/i', $url);
+    }
+
+    private function imageFileLooksCleanForPost($path, &$reason = '') {
+        $reason = '';
+        if (!file_exists($path)) {
+            $reason = 'file khong ton tai';
+            return false;
+        }
+
+        $size = @getimagesize($path);
+        if (!$size || empty($size[0]) || empty($size[1])) {
+            $reason = 'khong doc duoc kich thuoc anh';
+            return false;
+        }
+
+        $width = (int)$size[0];
+        $height = (int)$size[1];
+        $min_width = max(120, (int)($this->config['min_post_image_width'] ?? 420));
+        $min_height = max(120, (int)($this->config['min_post_image_height'] ?? 220));
+
+        if ($width < $min_width || $height < $min_height) {
+            $reason = "anh qua nho {$width}x{$height}";
+            return false;
+        }
+
+        $ratio = $width / max(1, $height);
+        if ($ratio > 3.4 || $ratio < 0.35) {
+            $reason = "ti le anh bat thuong {$width}x{$height}";
+            return false;
+        }
+
+        if (filesize($path) < 25 * 1024) {
+            $reason = 'dung luong anh qua nho';
+            return false;
+        }
+
+        return true;
     }
 
     private function imageExtension($content_type, $url) {
@@ -689,7 +761,7 @@ Yêu cầu:
         $titles = array_column(array_slice($articles, 0, 3), 'title');
         $topic = implode(', ', $titles);
 
-        return "A stunning professional football news banner composition. Dynamic football action scene with dramatic stadium lighting, green pitch, football/soccer ball in motion, vibrant atmosphere with fans silhouettes in background. Modern sports media design with bold colors (green, blue, gold accents). Text-free clean design, 4K ultra quality, cinematic sports photography style. Topic context: Vietnamese football news today.";
+        return "A stunning professional football news banner composition. Dynamic football action scene with dramatic stadium lighting, green pitch, football/soccer ball in motion, vibrant atmosphere with fans silhouettes in background. Modern sports media design with bold colors (green, blue, gold accents). Text-free clean design, no logo, no watermark, no brand mark, 4K ultra quality, cinematic sports photography style. Topic context: Vietnamese football news today.";
     }
 
     /**
@@ -708,7 +780,7 @@ Yêu cầu:
         // Ưu tiên Ollama local nếu có
         if (!empty($this->ollama_base_url)) {
             $result = $this->callOllama($prompt);
-            if ($result['success']) {
+            if ($this->isUsableAIResult($result)) {
                 return $result;
             }
             $this->log("⚠️ Ollama thất bại ({$result['message']}), thử Hugging Face...");
@@ -717,7 +789,7 @@ Yêu cầu:
         // Hugging Face free tier
         if (!empty($this->hf_token)) {
             $result = $this->callHuggingFace($prompt);
-            if ($result['success']) {
+            if ($this->isUsableAIResult($result)) {
                 return $result;
             }
             $this->log("⚠️ Hugging Face thất bại ({$result['message']}), thử Gemini...");
@@ -726,7 +798,7 @@ Yêu cầu:
         // Gemini fallback
         if (!empty($this->gemini_api_key)) {
             $result = $this->callGemini($prompt);
-            if ($result['success']) {
+            if ($this->isUsableAIResult($result)) {
                 return $result;
             }
             $this->log("⚠️ Gemini cũng thất bại: " . $result['message']);
@@ -742,7 +814,7 @@ Yêu cầu:
         // Fallback OpenAI / Grok nếu người dùng muốn dùng dịch vụ trả phí
         if (!empty($this->openai_api_key)) {
             $result = $this->callOpenAI($prompt);
-            if ($result['success']) {
+            if ($this->isUsableAIResult($result)) {
                 return $result;
             }
             $next_ai = !empty($this->grok_api_key) ? 'thử Grok...' : 'chưa có Grok key, thử Gemini...';
@@ -751,7 +823,7 @@ Yêu cầu:
 
         if (!empty($this->grok_api_key)) {
             $result = $this->callGrok($prompt);
-            if ($result['success']) {
+            if ($this->isUsableAIResult($result)) {
                 return $result;
             }
             $this->log("⚠️ Grok thất bại ({$result['message']}), thử Gemini...");
@@ -763,6 +835,23 @@ Yêu cầu:
     /**
      * Ollama local API - miễn phí, chạy trên máy người dùng.
      */
+    private function isUsableAIResult(&$result) {
+        if (empty($result['success'])) {
+            return false;
+        }
+
+        $text = trim((string)($result['text'] ?? ''));
+        if (mb_strlen($text) < 280) {
+            $result['success'] = false;
+            $result['message'] = 'AI trả về caption quá ngắn hoặc bị cắt giữa chừng';
+            $provider = strtoupper($result['provider'] ?? 'AI');
+            $this->log("⚠️ {$provider} trả về caption quá ngắn, bỏ qua kết quả này");
+            return false;
+        }
+
+        return true;
+    }
+
     private function callOllama($prompt) {
         try {
             $model = $this->config['ollama_model'] ?? 'gemma3';
@@ -1036,6 +1125,11 @@ Yêu cầu:
 
                 if (isset($result['candidates'][0]['content']['parts'][0]['text'])) {
                     $text = trim($result['candidates'][0]['content']['parts'][0]['text']);
+                    if (mb_strlen($text) < 280) {
+                        $last_message = 'Gemini trả về caption quá ngắn hoặc bị cắt giữa chừng';
+                        $this->log("⚠️ Gemini model {$model} trả về caption quá ngắn, thử model tiếp theo...");
+                        continue;
+                    }
                     $this->log("✅ Gemini ({$model}) tạo bài thành công");
                     return ['success' => true, 'text' => $text, 'provider' => 'gemini'];
                 }

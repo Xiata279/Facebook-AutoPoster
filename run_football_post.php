@@ -114,6 +114,9 @@ $config = [
     'post_style'         => $post_style,
     'content_template'   => $content_template,
     'max_posts'          => xiata_int($cli['max_posts'] ?? ($env['MAX_POSTS'] ?? null), 1, 1, 8),
+    'no_logo_images'     => xiata_bool($cli['no_logo_images'] ?? ($env['NO_LOGO_IMAGES'] ?? null), true),
+    'min_post_image_width' => xiata_int($cli['min_post_image_width'] ?? ($env['MIN_POST_IMAGE_WIDTH'] ?? null), 420, 120, 4000),
+    'min_post_image_height' => xiata_int($cli['min_post_image_height'] ?? ($env['MIN_POST_IMAGE_HEIGHT'] ?? null), 220, 120, 4000),
     // Bật tạo ảnh nếu có Gemini key
     'generate_image'     => false,
 
@@ -195,7 +198,8 @@ switch ($mode) {
             if (!is_dir($output_dir)) { mkdir($output_dir, 0755, true); }
 
             $ts = date('Ymd_His');
-            $txt_file = $output_dir . "summary_post_{$ts}.txt";
+            $post_name = (($config['post_style'] ?? 'tong_hop') === 'don_le') ? 'single_post' : 'summary_post';
+            $txt_file = $output_dir . "{$post_name}_{$ts}.txt";
             file_put_contents($txt_file, $preview['post_content']);
 
             $json_file = $output_dir . 'latest_post.json';
@@ -204,6 +208,8 @@ switch ($mode) {
                 'timestamp'    => date('Y-m-d H:i:s'),
                 'source_file'  => basename($txt_file),
                 'ai_provider'  => $preview['ai_provider'] ?? 'unknown',
+                'post_style'    => $config['post_style'] ?? 'tong_hop',
+                'content_template' => $config['content_template'] ?? 'tin_nong',
                 'image_path'    => $preview['image_path'] ?? null,
                 'image_paths'   => $preview['image_paths'] ?? [],
             ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));

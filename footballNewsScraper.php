@@ -182,6 +182,16 @@ class FootballNewsScraper {
             }
             $seen[$url] = true;
 
+            if ($this->isLikelyListingUrl($url)) {
+                $listing_articles = $this->fetchArticlesFromListingUrl($url, 8);
+                if (!empty($listing_articles)) {
+                    $articles = array_merge($articles, $listing_articles);
+                    $this->log("Đã lấy " . count($listing_articles) . " tin từ trang chuyên mục: {$url}");
+                    usleep(350000);
+                    continue;
+                }
+            }
+
             $this->log("Đang đọc bài viết từ link: {$url}");
             $article = $this->fetchArticleFromUrl($url);
             if (!empty($article['title']) || !empty($article['full_content'])) {
@@ -206,6 +216,124 @@ class FootballNewsScraper {
     /**
      * Đọc title, mô tả, ảnh đại diện và nội dung từ một URL bài viết.
      */
+    private function isLikelyListingUrl($url) {
+        $path = trim((string)(parse_url($url, PHP_URL_PATH) ?? ''), '/');
+        if ($path === '') {
+            return true;
+        }
+        if (preg_match('/(the-thao|bong-da|football|sport|sports|tin-tuc|category|chuyen-muc|\.epi)$/i', $path)) {
+            return true;
+        }
+        return !preg_match('/(\d{4,}|\.html?|\/c\/\d+|\/p\/\d+)/i', $path);
+    }
+
+    private function fetchArticlesFromListingUrl($url, $limit = 8) {
+        $html = $this->httpGet($url);
+        if (empty($html)) {
+            return [];
+        }
+
+        libxml_use_internal_errors(true);
+        $doc = new DOMDocument();
+        $doc->loadHTML('<?xml encoding="UTF-8">' . $html);
+        $xpath = new DOMXPath($doc);
+        $nodes = $xpath->query('//article//a[@href] | //h2/a[@href] | //h3/a[@href] | //h4/a[@href] | //a[contains(@class, "title")][@href] | //a[contains(@class, "story")][@href] | //a[contains(@class, "news")][@href]');
+
+        $articles = [];
+        $seen = [];
+        foreach ($nodes as $node) {
+            $title = trim(preg_replace('/\s+/u', ' ', $node->textContent));
+            if (mb_strlen($title) < 18) {
+                continue;
+            }
+
+            $link = $this->absoluteUrl($node->getAttribute('href'), $url);
+            if (!$this->isValidUrl($link) || !$this->isLikelyArticleLink($link, $url)) {
+                continue;
+            }
+
+            $key = $this->normalizeUrl($link);
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $container = $this->nearestContentNode($node);
+            $description = $container ? $this->listingDescription($xpath, $container) : '';
+            $image = $container ? $this->listingImage($xpath, $container, $url) : '';
+
+            $articles[] = [
+                'title' => $title,
+                'link' => $link,
+                'description' => $description,
+                'image' => $image,
+                'published_at' => date('Y-m-d H:i:s'),
+                'source' => parse_url($url, PHP_URL_HOST) ?: 'Link thủ công',
+                'full_content' => ''
+            ];
+
+            if (count($articles) >= $limit) {
+                break;
+            }
+        }
+
+        return $articles;
+    }
+
+    private function isLikelyArticleLink($link, $base_url) {
+        $path = parse_url($link, PHP_URL_PATH) ?? '';
+        if ($path === '' || $path === '/') {
+            return false;
+        }
+        if (preg_match('/(login|register|tag|search|author|video|photo|livescore|lich-thi-dau|bang-xep-hang)/i', $path)) {
+            return false;
+        }
+        if (preg_match('/(\d{4,}|\.html?|\/c\/\d+|\/p\/\d+)/i', $path)) {
+            return true;
+        }
+
+        $base_host = preg_replace('/^www\./i', '', parse_url($base_url, PHP_URL_HOST) ?: '');
+        $host = preg_replace('/^www\./i', '', parse_url($link, PHP_URL_HOST) ?: '');
+        return $base_host !== '' && $host === $base_host && substr_count(trim($path, '/'), '/') >= 1;
+    }
+
+    private function nearestContentNode($node) {
+        $current = $node;
+        for ($i = 0; $i < 4 && $current && $current->parentNode; $i++) {
+            $current = $current->parentNode;
+            if (in_array(strtolower($current->nodeName), ['article', 'li', 'div'], true)) {
+                return $current;
+            }
+        }
+        return $node->parentNode;
+    }
+
+    private function listingDescription($xpath, $node) {
+        $desc_node = $xpath->query('.//p | .//*[contains(@class, "desc")] | .//*[contains(@class, "sapo")] | .//*[contains(@class, "summary")]', $node);
+        if ($desc_node->length > 0) {
+            $text = trim(preg_replace('/\s+/u', ' ', $desc_node->item(0)->textContent));
+            return mb_substr($text, 0, 300);
+        }
+        return '';
+    }
+
+    private function listingImage($xpath, $node, $base_url) {
+        $img_node = $xpath->query('.//img | .//source', $node);
+        foreach ($img_node as $img) {
+            $src = $img->getAttribute('src')
+                ?: $img->getAttribute('data-src')
+                ?: $img->getAttribute('data-original')
+                ?: $img->getAttribute('data-lazy-src')
+                ?: $img->getAttribute('srcset')
+                ?: $img->getAttribute('data-srcset');
+            $src = $this->firstSrcsetUrl($src);
+            if ($src && !preg_match('/logo|avatar|icon|sprite/i', $src)) {
+                return $this->absoluteUrl($src, $base_url);
+            }
+        }
+        return '';
+    }
+
     public function fetchArticleFromUrl($url) {
         $html = $this->httpGet($url);
         if (empty($html)) {
@@ -804,17 +932,29 @@ class FootballNewsScraper {
     }
 
     private function firstImage($xpath) {
-        $nodes = $xpath->query('//article//img | //main//img | //img');
+        $nodes = $xpath->query('//article//img | //article//source | //main//img | //main//source | //img | //source');
         foreach ($nodes as $node) {
             $src = $node->getAttribute('src')
                 ?: $node->getAttribute('data-src')
                 ?: $node->getAttribute('data-original')
-                ?: $node->getAttribute('data-lazy-src');
+                ?: $node->getAttribute('data-lazy-src')
+                ?: $node->getAttribute('srcset')
+                ?: $node->getAttribute('data-srcset');
+            $src = $this->firstSrcsetUrl($src);
             if ($src && !preg_match('/logo|avatar|icon|sprite/i', $src)) {
                 return $src;
             }
         }
         return '';
+    }
+
+    private function firstSrcsetUrl($value) {
+        $value = trim((string)$value);
+        if ($value === '') {
+            return '';
+        }
+        $first = trim(explode(',', $value)[0]);
+        return trim(explode(' ', $first)[0]);
     }
 
     private function absoluteUrl($url, $base_url) {
